@@ -145,10 +145,10 @@ expiry_ok      1    1 if expires_at > now
 revoked        1    1 if a revocation matches
 delegatable    1
 confirm        1
-signature      1    Phase 8a: HMAC valid
-chain          1    Phase 8b: delegation chain valid
-attenuation    1    Phase 8b: attenuation valid
-conf_bind      1    Phase 8d: confirmation action-binding valid
+signature      1    HMAC valid
+chain          1    delegation chain valid
+attenuation    1    attenuation valid
+conf_bind      1    confirmation action-binding valid
 ```
 
 The tokenizer turns a request bundle into a matrix `X ∈ ℝ^{N×48}`: one **request (query)**
@@ -355,7 +355,7 @@ path to a side effect is a current `ALLOW` for the exact call.**
 
 For high-risk actions (`gmail.send`, `slack.post`, `file.delete`, `secrets_db.read`,
 `browser.invoke`), the gate returns `ESCALATE` instead of `ALLOW` unless a trusted confirmation
-is present — a human in the loop. And confirmations are themselves **action-bound** (Phase 8d):
+is present — a human in the loop. And confirmations are themselves **action-bound**:
 a human approval of "send to bob" carries the hash of *that* action, so it cannot be replayed
 to authorize "send to attacker." Same `action_hash` machinery, applied to the confirmation.
 

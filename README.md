@@ -160,13 +160,13 @@ python -m capability_transformer.api
 Endpoints:
 
 - `POST /evaluate`      — evaluate a request bundle → decision + trace
-- `POST /authorize`     — (Phase 8c) evaluate + issue a fresh execution grant on ALLOW
-- `POST /execute`       — (Phase 8c) run a mock tool, but only for a valid grant (fail-closed)
-- `POST /mint`          — (Phase 8a) sign a capability with the demo issuer keyring
-- `GET  /audit`         — (Phase 8e) the hash-chained audit log
-- `GET  /audit/verify`  — (Phase 8e) verify the chain is intact
-- `GET  /audit/{id}`    — (Phase 8e) one audit event
-- `POST /flow/provenance` — (Phase 8f) join a base provenance with tool-output taints
+- `POST /authorize`     — evaluate + issue a fresh execution grant on ALLOW
+- `POST /execute`       — run a mock tool, but only for a valid grant (fail-closed)
+- `POST /mint`          — sign a capability with the demo issuer keyring
+- `GET  /audit`         — the hash-chained audit log
+- `GET  /audit/verify`  — verify the chain is intact
+- `GET  /audit/{id}`    — one audit event
+- `POST /flow/provenance` — join a base provenance with tool-output taints
 - `GET  /health`        — liveness
 - `GET  /schema`        — bounded vocabularies + JSON schema
 - `GET  /examples`      — bundled example requests
@@ -227,7 +227,7 @@ Add a trusted confirmation to the body above and the same request returns `ALLOW
   **high-risk** (`gmail.send`, `slack.post`, `file.delete`, `secrets_db.read`,
   `browser.invoke`) and no trusted confirmation token is present. Route to a human.
 
-## Cryptographically authenticated & attenuable capabilities (Phase 8a/8b)
+## Cryptographically authenticated & attenuable capabilities
 
 By default the engine trusts a capability's `issuer` *label* (v1 behavior). Run with
 signature enforcement to get **cryptographically authenticated capabilities under a
@@ -252,7 +252,7 @@ In signed mode the failure semantics are explicit and unambiguous:
 | malformed / forged signature      | `DENY [invalid_signature]` |
 | unknown / untrusted issuer        | `DENY [issuer_not_trusted]`|
 
-**Attenuable delegation (Phase 8b, macaroon-style chained HMAC).** The *holder* of a
+**Attenuable delegation (macaroon-style chained HMAC).** The *holder* of a
 capability can mint an attenuated child offline — no issuer key needed — and the gateway
 re-derives the chain:
 
@@ -276,12 +276,12 @@ PYTHONPATH=. python examples/signed_capability_demo.py
 Signatures use HMAC-SHA256 under a per-issuer keyring with key rotation (`kid`). This is a
 single-verifier (symmetric) model and a focused subset of macaroon semantics; swap in
 Ed25519 or full macaroons (third-party / discharge caveats) for multi-party, zero-trust
-verifiers — the head/bit interface stays identical. See `implementation.md` §21–§22.
+verifiers — the head/bit interface stays identical. See `implementation.md` for details.
 
-## Gated tool runtime — the enforcement boundary (Phase 8c)
+## Gated tool runtime — the enforcement boundary
 
-Through Phase 8b the service was an *evaluator*: it returned a decision but gated nothing.
-Phase 8c adds the component that actually holds the (mock) tools and **refuses to run
+On its own the engine is an *evaluator*: it returns a decision but gates nothing. The gated
+tool runtime adds the component that actually holds the (mock) tools and **refuses to run
 anything without a fresh, action-bound, single-use grant** signed by the gateway:
 
 ```python
@@ -319,7 +319,7 @@ secret — never the LLM, the caller, or a bare decision object. It ships with a
 mock tools; point that registry at your real tool adapters to enforce live side effects
 (the gate semantics are unchanged).
 
-**Action-bound confirmations (Phase 8d).** A high-risk confirmation can be bound to the
+**Action-bound confirmations.** A high-risk confirmation can be bound to the
 hash of the *exact* action (subject, action, object, args), so a human approval of "send
 to bob" cannot be replayed to authorize "send to attacker":
 
@@ -331,7 +331,7 @@ With `require_bound_confirmations=True`, an unbound or mismatched confirmation y
 `ESCALATE` (and therefore no grant). `ToolGateway.authorize` sets the bundle's
 `action_hash` from the concrete `ToolCall`, so binding is enforced end to end.
 
-## Tamper-evident audit log (Phase 8e)
+## Tamper-evident audit log
 
 Every authorization, grant mint, grant rejection, and tool execution is recorded in a
 **hash-chained** log: each event stores `previous_hash` and
@@ -357,13 +357,13 @@ and the `policy_version` / `compiled_matrix_version`. Run the demo:
 PYTHONPATH=. python examples/audit_log_demo.py
 ```
 
-This gives the project three production-shaped properties: **authenticated authority**
-(8a/8b), **gated side effects** (8c/8d), and **forensic integrity** (8e).
+This gives the project three production-shaped properties: **authenticated authority**,
+**gated side effects**, and **forensic integrity**.
 
-## Output-side information flow (Phase 8f)
+## Output-side information flow
 
-Input-side provenance stops untrusted data from *driving* a side effect. Phase 8f closes
-the loop on the *output* side: every tool output is **data, never authority**, so it is
+Input-side provenance stops untrusted data from *driving* a side effect. Output-side
+information flow closes the loop: every tool output is **data, never authority**, so it is
 labeled with a provenance **taint**, and a later request influenced by that output
 inherits the taint via a least-trusted **join**. Untrusted taint cannot be laundered —
 re-reading, summarizing, or chaining it keeps the taint, and the gateway still denies.
