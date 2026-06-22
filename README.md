@@ -85,13 +85,16 @@ python -m capability_transformer.api
 
 Endpoints:
 
-- `POST /evaluate`  — evaluate a request bundle → decision + trace
-- `POST /authorize` — (Phase 8c) evaluate + issue a fresh execution grant on ALLOW
-- `POST /execute`   — (Phase 8c) run a mock tool, but only for a valid grant (fail-closed)
-- `POST /mint`      — (Phase 8a) sign a capability with the demo issuer keyring
-- `GET  /health`    — liveness
-- `GET  /schema`    — bounded vocabularies + JSON schema
-- `GET  /examples`  — bundled example requests
+- `POST /evaluate`      — evaluate a request bundle → decision + trace
+- `POST /authorize`     — (Phase 8c) evaluate + issue a fresh execution grant on ALLOW
+- `POST /execute`       — (Phase 8c) run a mock tool, but only for a valid grant (fail-closed)
+- `POST /mint`          — (Phase 8a) sign a capability with the demo issuer keyring
+- `GET  /audit`         — (Phase 8e) the hash-chained audit log
+- `GET  /audit/verify`  — (Phase 8e) verify the chain is intact
+- `GET  /audit/{id}`    — (Phase 8e) one audit event
+- `GET  /health`        — liveness
+- `GET  /schema`        — bounded vocabularies + JSON schema
+- `GET  /examples`      — bundled example requests
 
 ## Example curl commands
 
@@ -250,6 +253,35 @@ engine = CapabilityTransformer(require_bound_confirmations=True)  # accept only 
 With `require_bound_confirmations=True`, an unbound or mismatched confirmation yields
 `ESCALATE` (and therefore no grant). `ToolGateway.authorize` sets the bundle's
 `action_hash` from the concrete `ToolCall`, so binding is enforced end to end.
+
+## Tamper-evident audit log (Phase 8e)
+
+Every authorization, grant mint, grant rejection, and tool execution is recorded in a
+**hash-chained** log: each event stores `previous_hash` and
+`current_hash = SHA256(canonical_json(event_without_current_hash))`. Any modification,
+deletion, reorder, or hash edit breaks the chain and is caught by `verify()`.
+
+```python
+from capability_transformer import AuditLog
+from capability_transformer.runtime import ToolGateway, GatedToolRuntime
+
+log = AuditLog()
+gateway, runtime = ToolGateway(audit_log=log), GatedToolRuntime(audit_log=log)
+# ... authorize() and execute() now append linked events ...
+log.verify()            # -> ok=True on an intact chain; pinpoints broken_at otherwise
+```
+
+Events carry `event_type` (`authorize_allow|authorize_deny|authorize_escalate|
+grant_minted|execute_allow|execute_deny|grant_rejected`), subject/object/action, **hashes**
+of args and the decision trace (never raw payloads or secrets), the grant nonce/decision id,
+and the `policy_version` / `compiled_matrix_version`. Run the demo:
+
+```bash
+PYTHONPATH=. python examples/audit_log_demo.py
+```
+
+This gives the project three production-shaped properties: **authenticated authority**
+(8a/8b), **gated side effects** (8c/8d), and **forensic integrity** (8e).
 
 ## ⚠️ Warning — prototype, not production security
 

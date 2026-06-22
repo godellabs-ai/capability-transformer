@@ -8,6 +8,9 @@ this module so that the "weights" of the machine live in exactly one place.
 
 from __future__ import annotations
 
+import json
+from hashlib import sha256
+
 import numpy as np
 
 # --------------------------------------------------------------------------------------
@@ -171,3 +174,30 @@ MATCHING_HEADS = [
 ]
 
 ENGINE_NAME = "hard-attention-v1"
+
+# Versions recorded in the audit log (Phase 8e). POLICY_VERSION is the decision-semantics
+# version; MATRIX_VERSION is a stable digest of the compiled tensor configuration, so a
+# change to the bounded universe / slot layout / high-risk relation is forensically visible.
+POLICY_VERSION = "policy-v1"
+
+
+def _matrix_version() -> str:
+    descriptor = {
+        "token_types": TOKEN_TYPES,
+        "subjects": SUBJECTS,
+        "objects": OBJECTS,
+        "rights": RIGHTS,
+        "issuers": ISSUERS,
+        "provenance": PROVENANCE,
+        "D": D,
+        "slots": SLOT,
+        "high_risk": HIGH_RISK.astype(int).tolist(),
+        "trusted_issuer_mask": TRUSTED_ISSUER_MASK.astype(int).tolist(),
+        "trusted_prov_mask": TRUSTED_PROV_MASK.astype(int).tolist(),
+        "head_reason": HEAD_REASON,
+    }
+    blob = json.dumps(descriptor, sort_keys=True, separators=(",", ":"))
+    return "matrix-" + sha256(blob.encode()).hexdigest()[:12]
+
+
+MATRIX_VERSION = _matrix_version()

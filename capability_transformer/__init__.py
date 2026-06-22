@@ -3,6 +3,7 @@
 A deterministic, transformer-native object-capability enforcement gateway.
 """
 
+from .audit import AuditEvent, AuditLog
 from .core import CapabilityTransformer
 from .runtime import (
     ExecutionGrant,
@@ -35,6 +36,8 @@ __all__ = [
     "ExecutionGrant",
     "ToolCall",
     "ToolExecution",
+    "AuditLog",
+    "AuditEvent",
 ]
 
 __version__ = "0.1.0"

@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from . import compiled_weights as W
 from . import crypto
+from .audit import AuditEvent, AuditLog, VerificationResult
 from .core import CapabilityTransformer
 from .runtime import (
     ExecutionGrant,
@@ -35,8 +36,10 @@ app = FastAPI(
 _engine = CapabilityTransformer()
 # Phase 8c: the policy gateway and the gated tool runtime share a secret so the demo runs
 # in one process. In production they are separate trust domains.
-_tool_gateway = ToolGateway(engine=_engine)
-_tool_runtime = GatedToolRuntime()
+# Phase 8e: both write to one hash-chained audit log.
+_audit_log = AuditLog()
+_tool_gateway = ToolGateway(engine=_engine, audit_log=_audit_log)
+_tool_runtime = GatedToolRuntime(audit_log=_audit_log)
 _EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
 
 
@@ -57,7 +60,8 @@ class ExecuteRequest(BaseModel):
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "engine": W.ENGINE_NAME, "trained": False, "softmax_used": False}
+    return {"status": "ok", "engine": W.ENGINE_NAME, "trained": False, "softmax_used": False,
+            "policy_version": W.POLICY_VERSION, "compiled_matrix_version": W.MATRIX_VERSION}
 
 
 @app.post("/evaluate", response_model=Decision)
@@ -88,6 +92,26 @@ def execute(req: ExecuteRequest) -> ToolExecution:
     from datetime import datetime, timezone
 
     return _tool_runtime.execute(req.grant, req.call, now=datetime.now(timezone.utc))
+
+
+@app.get("/audit", response_model=list[AuditEvent])
+def audit_events() -> list[AuditEvent]:
+    """Phase 8e: the full hash-chained audit log (hashes only, no raw payloads)."""
+    return _audit_log.events()
+
+
+@app.get("/audit/verify", response_model=VerificationResult)
+def audit_verify() -> VerificationResult:
+    """Phase 8e: recompute the chain and report whether it is intact."""
+    return _audit_log.verify()
+
+
+@app.get("/audit/{event_id}", response_model=AuditEvent)
+def audit_event(event_id: str) -> AuditEvent:
+    event = _audit_log.get(event_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail="unknown event_id")
+    return event
 
 
 @app.post("/mint", response_model=Capability)

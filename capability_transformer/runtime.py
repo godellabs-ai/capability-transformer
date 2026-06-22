@@ -32,7 +32,8 @@ from typing import Callable, Optional
 
 from pydantic import BaseModel, Field
 
-from . import crypto
+from . import audit, crypto
+from .audit import AuditLog
 from .core import CapabilityTransformer
 from .schema import CapabilityBundle, Decision, Object, Right, Subject
 from .util import aware
@@ -179,9 +180,11 @@ class GatedToolRuntime:
     no tool. The nonce store enforces single-use grants (replay protection).
     """
 
-    def __init__(self, secret: str = RUNTIME_SECRET, tools: dict | None = None):
+    def __init__(self, secret: str = RUNTIME_SECRET, tools: dict | None = None,
+                 audit_log: Optional[AuditLog] = None):
         self.secret = secret
         self.tools = dict(DEFAULT_TOOLS if tools is None else tools)
+        self.audit_log = audit_log
         self._used_nonces: set[str] = set()
 
     def _refuse(self, reason: str) -> ToolExecution:
@@ -195,6 +198,30 @@ class GatedToolRuntime:
         now: datetime,
     ) -> ToolExecution:
         now = aware(now)
+        result = self._decide(grant, call, now=now)
+        if self.audit_log is not None:
+            self.audit_log.record(
+                audit.execution_event_type(result.executed, result.refused_reason),
+                timestamp=now,
+                subject=call.subject,
+                object=call.object,
+                action=call.action,
+                args_hash=audit.hash_payload(call.args),
+                action_hash=compute_action_hash(call),
+                decision="ALLOW" if result.executed else "DENY",
+                reasons=[] if result.executed else [result.refused_reason or "refused"],
+                nonce=grant.nonce if grant is not None else None,
+                grant_decision_id=grant.decision_id if grant is not None else None,
+            )
+        return result
+
+    def _decide(
+        self,
+        grant: Optional[ExecutionGrant],
+        call: ToolCall,
+        *,
+        now: datetime,
+    ) -> ToolExecution:
 
         # 1. There must be a grant at all (a DENY/ESCALATE yields no grant).
         if grant is None:
@@ -236,9 +263,11 @@ class ToolGateway:
     trust domains; here they share a secret so the demo runs in one process.
     """
 
-    def __init__(self, engine: CapabilityTransformer | None = None, issuer: GrantIssuer | None = None):
+    def __init__(self, engine: CapabilityTransformer | None = None,
+                 issuer: GrantIssuer | None = None, audit_log: Optional[AuditLog] = None):
         self.engine = engine or CapabilityTransformer()
         self.issuer = issuer or GrantIssuer()
+        self.audit_log = audit_log
 
     def authorize(
         self,
@@ -258,12 +287,34 @@ class ToolGateway:
             bundle = bundle.model_copy(update={"action_hash": compute_action_hash(call)})
 
         decision = self.engine.evaluate(bundle)
+        action_hash = compute_action_hash(call)
+        args_hash = audit.hash_payload(call.args)
+
+        # Phase 8e: record the authorization decision in the hash-chained log.
+        if self.audit_log is not None:
+            self.audit_log.record(
+                audit.authorize_event_type(decision.decision),
+                timestamp=now,
+                subject=call.subject, object=call.object, action=call.action,
+                args_hash=args_hash, action_hash=action_hash,
+                decision=decision.decision, reasons=list(decision.reasons),
+                trace_hash=audit.hash_payload(decision.trace.model_dump(mode="json")),
+            )
 
         # Only ALLOW yields a grant, and only if the call matches the evaluated action.
         bound = (bundle.subject, bundle.action, bundle.object) == (call.subject, call.action, call.object)
         if decision.decision != "ALLOW" or not bound:
             return decision, None
 
-        decision_id = sha256(f"{compute_action_hash(call)}:{nonce}".encode()).hexdigest()[:16]
+        decision_id = sha256(f"{action_hash}:{nonce}".encode()).hexdigest()[:16]
         grant = self.issuer.issue(call, now=now, nonce=nonce, decision_id=decision_id, ttl_seconds=ttl_seconds)
+
+        if self.audit_log is not None:
+            self.audit_log.record(
+                "grant_minted",
+                timestamp=now,
+                subject=call.subject, object=call.object, action=call.action,
+                args_hash=args_hash, action_hash=action_hash,
+                decision="ALLOW", nonce=nonce, grant_decision_id=decision_id,
+            )
         return decision, grant

@@ -357,8 +357,8 @@ or a delegation request), so the common case mirrors the canonical example exact
     boundary.
   - **8d — action-hash-bound confirmations.** ✅ Done. See §26. A confirmation may bind to
     the hash of the exact action it approves, so it cannot be replayed across actions.
-  - **8e — tamper-evident audit log.** Next. Hash-chained decision log so the audit trail
-    is append-only and verifiable.
+  - **8e — tamper-evident audit log.** ✅ Done. See §28. Hash-chained, append-only,
+    verifiable decision/grant/execution log.
   - **8f — remaining.** Output-side information-flow prototype. Plus longer-term: compile a
     richer capability calculus into fixed attention/FFN matrices; formal verification of
     the reducer; asymmetric signatures / real macaroons with third-party caveats.
@@ -497,9 +497,42 @@ Covered by `tests/test_bound_confirmations.py`: bound confirmation matching the 
 allows; wrong/absent hash escalates in strict mode; a confirmation for one action cannot
 authorize another; end-to-end the gateway refuses a grant when args differ.
 
-## 27. Future work (post-8d)
+## 28. Phase 8e — tamper-evident audit log
 
-- **8e — tamper-evident audit log.** Hash-chained, append-only decision log.
+Every `/authorize` and `/execute` outcome is recorded in a **hash-chained**, append-only
+log (`capability_transformer/audit.py`), making the side-effect boundary forensically
+replayable.
+
+- **Hash chain.** Each event stores `previous_hash` and
+  `current_hash = SHA256(canonical_json(event_without_current_hash))`, where the hashed
+  payload *includes* `previous_hash`. The first event links to a genesis hash. `verify()`
+  recomputes the chain and pinpoints `broken_at` / `reason` on any failure.
+- **What `verify()` catches.** A modified event (recomputed `current_hash` mismatch — covers
+  changed decision / reasons / action_hash), a changed `previous_hash`, a deleted middle
+  event, and reordered events (both break `previous_hash` linkage).
+- **Event types.** `authorize_allow`, `authorize_deny`, `authorize_escalate`,
+  `grant_minted`, `execute_allow`, `execute_deny`, `grant_rejected` (the last for grants
+  that fail signature/freshness/binding/replay checks).
+- **Event fields.** `event_id`, `event_type`, `timestamp`, subject/object/action,
+  `args_hash`, `action_hash`, `decision`, `reasons`, `trace_hash`, `nonce`,
+  `grant_decision_id`, `policy_version`, `compiled_matrix_version`, `previous_hash`,
+  `current_hash`.
+- **Privacy.** Only *hashes* of sensitive args and of the decision trace are stored — never
+  the raw recipient/body/payload, and never secret/key material. `compiled_matrix_version`
+  is a stable digest of the compiled tensor configuration, so a change to the bounded
+  universe or slot layout is forensically visible.
+- **Sinks.** In-memory by default; an optional JSONL file sink mirrors each event.
+
+API: `GET /audit`, `GET /audit/verify`, `GET /audit/{event_id}`. See
+`examples/audit_log_demo.py`. Covered by `tests/test_audit_log.py` (valid chain verifies;
+tampered decision/action_hash/reasons, removed, reordered, and previous-hash edits all
+fail; allow/deny/refused executions are all logged).
+
+After 8e the project has three production-shaped properties: **authenticated authority**
+(8a/8b), **gated side effects** (8c/8d), and **forensic integrity** (8e).
+
+## 29. Future work (post-8e)
+
 - **8f — output-side information-flow prototype.** Taint tracking on tool outputs.
 - Longer term: compile a richer capability calculus into fixed attention/FFN matrices;
   formal verification of the reducer; asymmetric signatures / real macaroons.

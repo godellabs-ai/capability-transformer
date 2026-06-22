@@ -133,6 +133,33 @@ def test_authorize_deny_then_execute_refused():
     assert r2.json()["refused_reason"] == "no_grant"
 
 
+def test_audit_endpoints():
+    # Generate an authorize event, then read + verify the chain.
+    body = {
+        "bundle": {
+            "subject": "agent", "action": "draft", "object": "gmail",
+            "source_provenance": "trusted_user", "capabilities": [_cap(["draft"])],
+            "revocations": [], "confirmations": []},
+        "args": {"to": "bob"},
+    }
+    client.post("/authorize", json=body)
+
+    r = client.get("/audit")
+    assert r.status_code == 200
+    events = r.json()
+    assert len(events) >= 1
+    eid = events[-1]["event_id"]
+
+    v = client.get("/audit/verify")
+    assert v.status_code == 200
+    assert v.json()["ok"] is True
+
+    one = client.get(f"/audit/{eid}")
+    assert one.status_code == 200
+    assert one.json()["event_id"] == eid
+    assert client.get("/audit/does-not-exist").status_code == 404
+
+
 def test_invalid_enum_rejected():
     r = client.post("/evaluate", json={
         "subject": "agent", "action": "teleport", "object": "gmail",
