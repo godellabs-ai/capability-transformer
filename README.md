@@ -10,6 +10,9 @@ reason trace.
 > attack-success-rate 100% → 5.7%) while 100% of legitimate tasks still run.** Deterministic,
 > model-independent, fully audited — see the **Benchmark** section below.
 
+📖 **Deep dive:** [*Attention as a Capability Machine*](blog/introducing-capability-transformer.md)
+— motivation, full architecture, and how it compares to OPA/Cedar, guardrails, and CaMeL.
+
 ---
 
 ## What this is
