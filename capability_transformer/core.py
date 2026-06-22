@@ -18,10 +18,21 @@ class CapabilityTransformer:
 
     ``evaluate`` runs the compiled tensor pipeline and reduces the hard-attention head
     masks to a single decision with all failing reason codes.
+
+    Phase 8a: pass ``require_signatures=True`` (optionally with a ``keyring``) to enforce
+    unforgeable, HMAC-signed capabilities. Defaults preserve v1 behavior (label trust).
     """
 
+    def __init__(self, *, keyring=None, require_signatures: bool = False):
+        self.keyring = keyring
+        self.require_signatures = require_signatures
+
     def evaluate(self, bundle: CapabilityBundle) -> Decision:
-        encoded = tokenizer.encode(bundle)
+        encoded = tokenizer.encode(
+            bundle,
+            keyring=self.keyring,
+            require_signatures=self.require_signatures,
+        )
         att = hard_attention.compute(encoded)
         decision, reasons = self._reduce(bundle, att)
         trace = trace_mod.build_trace(bundle, att, decision, reasons)
@@ -38,6 +49,8 @@ class CapabilityTransformer:
         scope_ok = heads["head_scope"].passed
         delegation_head = heads["head_delegation"]
         delegation_ok = delegation_head.passed or not delegation_head.relevant
+        sig_head = heads["head_signature_valid"]
+        sig_ok = sig_head.passed or not sig_head.relevant
 
         # ---- collect DENY reasons (return ALL failing codes, not just the first) -----
         reasons: list[str] = []
@@ -55,10 +68,16 @@ class CapabilityTransformer:
                 ]
                 if failed_matching:
                     reasons.extend(failed_matching)
+                elif sig_head.relevant and not sig_head.passed:
+                    # Forged: the six fields match but the signature does not.
+                    pass  # invalid_signature is appended below.
                 else:
                     # Caps exist and every head individually passes, but no single cap
                     # satisfies all of them simultaneously: still a missing authority.
                     reasons.append("missing_capability")
+
+        if sig_head.relevant and not sig_head.passed:
+            reasons.append(sig_head.reason)
 
         if not prov_ok:
             reasons.append(heads["head_provenance_safe"].reason)
@@ -69,7 +88,7 @@ class CapabilityTransformer:
         if not scope_ok:
             reasons.append(heads["head_scope"].reason)
 
-        required_ok = has_match and prov_ok and scope_ok and delegation_ok
+        required_ok = has_match and prov_ok and scope_ok and delegation_ok and sig_ok
 
         if not required_ok:
             return "DENY", _dedupe(reasons)

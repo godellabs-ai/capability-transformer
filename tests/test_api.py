@@ -79,6 +79,21 @@ def test_evaluate_confirmed_allow():
     assert r.json()["decision"] == "ALLOW"
 
 
+def test_mint_signs_capability():
+    cap = {"id": "cap1", "subject": "agent", "object": "file", "rights": ["read"],
+           "issuer": "trusted_user", "expires_at": FUTURE, "scope": {}, "delegatable": False}
+    r = client.post("/mint", json=cap)
+    assert r.status_code == 200
+    assert r.json()["signature"]  # signature populated
+
+
+def test_mint_untrusted_issuer_rejected():
+    cap = {"id": "cap1", "subject": "agent", "object": "file", "rights": ["read"],
+           "issuer": "web_page", "expires_at": FUTURE, "scope": {}, "delegatable": False}
+    r = client.post("/mint", json=cap)
+    assert r.status_code == 422  # no signing key for an untrusted issuer
+
+
 def test_invalid_enum_rejected():
     r = client.post("/evaluate", json={
         "subject": "agent", "action": "teleport", "object": "gmail",

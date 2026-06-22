@@ -108,10 +108,39 @@ def compute(enc: EncodedBundle) -> AttentionResult:
 
     # Security boundary: element-wise AND across the six heads, OR across capabilities.
     if n_caps:
-        matched_mask = subj_mask & obj_mask & right_mask & issuer_mask & expiry_mask & not_revoked_mask
+        core_mask = subj_mask & obj_mask & right_mask & issuer_mask & expiry_mask & not_revoked_mask
+        sig_mask = _bool(C[:, W.SIG_OFF])
     else:
-        matched_mask = np.zeros(0, bool)
+        core_mask = np.zeros(0, bool)
+        sig_mask = np.zeros(0, bool)
+
+    # Phase 8a: when signatures are enforced, an unsigned/forged capability cannot be a
+    # valid match — the signature-valid bit joins the conjunction.
+    if enc.require_signatures and n_caps:
+        matched_mask = core_mask & sig_mask
+    else:
+        matched_mask = core_mask
     matched_cap_ids = [cap_ids[i] for i in np.nonzero(matched_mask)[0]] if n_caps else []
+
+    # ---- Head 11 (Phase 8a): signature-valid -----------------------------------------
+    # Relevant only when signatures are enforced. It fails when a capability would
+    # otherwise match on all six fields but carries no valid issuer signature (forged).
+    has_core = bool(core_mask.any()) if n_caps else False
+    if not enc.require_signatures:
+        sig_passed = True
+    elif not has_core:
+        # Some other head explains the denial; don't blame the signature spuriously.
+        sig_passed = True
+    else:
+        sig_passed = bool((core_mask & sig_mask).any())
+    heads["head_signature_valid"] = HeadResult(
+        name="head_signature_valid",
+        passed=sig_passed,
+        per_cap_mask=sig_mask if n_caps else np.zeros(0, bool),
+        matched_cap_ids=[cap_ids[i] for i in np.nonzero(core_mask & sig_mask)[0]] if n_caps else [],
+        reason=None if sig_passed else W.HEAD_REASON["head_signature_valid"],
+        relevant=enc.require_signatures,
+    )
 
     # ---- Head 7: provenance-safe -----------------------------------------------------
     # Untrusted data may drive a passive read but never a side effect.

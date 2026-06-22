@@ -51,6 +51,7 @@ REASON_CODES = [
     "confirmation_required",
     "issuer_not_trusted",
     "scope_violation",
+    "invalid_signature",
     "allowed",
 ]
 
@@ -84,7 +85,8 @@ EXPIRY_OFF = PROV_OFF + N_PROV        # 40
 REVOKED_OFF = EXPIRY_OFF + 1          # 41
 DELEG_OFF = REVOKED_OFF + 1           # 42
 CONFIRM_OFF = DELEG_OFF + 1           # 43
-D = CONFIRM_OFF + 1                   # 44
+SIG_OFF = CONFIRM_OFF + 1             # 44  (Phase 8a: signature-valid bit)
+D = SIG_OFF + 1                       # 45
 
 # Convenience slot slices (start, stop) for slicing the token matrix X.
 SLOT = {
@@ -148,6 +150,7 @@ HEAD_REASON = {
     "head_confirmation": "confirmation_required",
     "head_scope": "scope_violation",
     "head_delegation": "delegation_not_allowed",
+    "head_signature_valid": "invalid_signature",
 }
 
 # The six heads whose conjunction forms the capability-matching security boundary.

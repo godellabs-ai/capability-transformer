@@ -26,6 +26,10 @@ CONDITIONAL_HEADS = ["head_confirmation", "head_scope", "head_delegation"]
 
 def _included_head_names(att: AttentionResult, required_ok: bool) -> list[str]:
     names = list(ALWAYS_HEADS)
+    # Signature enforcement (Phase 8a) is a matching-style gate; show it next to the
+    # other matching heads whenever it is active.
+    if att.heads["head_signature_valid"].relevant:
+        names.append("head_signature_valid")
     # Confirmation only gates once the required hard checks have passed.
     if att.heads["head_confirmation"].relevant and required_ok:
         names.append("head_confirmation")

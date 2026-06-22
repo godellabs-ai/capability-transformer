@@ -9,11 +9,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 from . import compiled_weights as W
+from . import crypto
 from .core import CapabilityTransformer
-from .schema import CapabilityBundle, Decision
+from .schema import Capability, CapabilityBundle, Decision
 
 app = FastAPI(
     title="capability-transformer",
@@ -34,6 +35,20 @@ def health() -> dict:
 def evaluate(bundle: CapabilityBundle) -> Decision:
     """Evaluate a request bundle and return a decision + audit trace."""
     return _engine.evaluate(bundle)
+
+
+@app.post("/mint", response_model=Capability)
+def mint(cap: Capability) -> Capability:
+    """Phase 8a: sign a capability with the demo issuer keyring.
+
+    Returns the capability with its ``signature`` field populated. Only trusted issuers
+    (``trusted_user``, ``system``) hold keys; minting for any other issuer fails with 422.
+    """
+    try:
+        signature = crypto.mint(cap)
+    except KeyError as exc:  # unknown / untrusted issuer has no signing key
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return cap.model_copy(update={"signature": signature})
 
 
 @app.get("/schema")

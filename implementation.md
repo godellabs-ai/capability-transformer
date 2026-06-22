@@ -237,6 +237,7 @@ head is a pure tensor expression returning a Boolean mask over capabilities:
 | 8 | `head_confirmation`   | high-risk ⇒ ∃ matching trusted confirmation token  | `confirmation_required` |
 | 9 | `head_scope`          | matched cap's scope ⊆ request scope                 | `scope_violation`     |
 | 10| `head_delegation`     | action==delegate ⇒ ∃ valid cap with `delegate` ∧ target right | `delegation_not_allowed` |
+| 11| `head_signature_valid`| (Phase 8a) signatures enforced ⇒ a matching cap carries a valid issuer HMAC | `invalid_signature` |
 
 The **matched-capability mask** is the element-wise AND of heads 1–6:
 
@@ -331,18 +332,51 @@ or a delegation request), so the common case mirrors the canonical example exact
 
 ## 18. Phase-by-phase roadmap
 
-- **Phase 0 — scaffold.** Package, schemas, tests dir, examples.
-- **Phase 1 — static checker.** Subject/object/right exact-match hard-attention heads.
-- **Phase 2 — provenance & issuer trust.** Data has no authority.
-- **Phase 3 — high-risk escalation.** Confirmation tokens; ALLOW vs ESCALATE.
-- **Phase 4 — expiry & revocation.** Stale authority denied.
-- **Phase 5 — delegation & attenuation.** Weaker-only grants.
-- **Phase 6 — API gateway.** FastAPI endpoints, JSON schema, trace output.
-- **Phase 7 — exhaustive testing & fuzzing.** Enumerate bounded universe; property tests.
-- **Phase 8 — transformer compilation & hardening.** Compile a richer capability
-  calculus into fixed attention/FFN matrices; formal verification; real cryptographic
-  capability signatures; real (sandboxed) tool adapters; session capability bundles;
-  output-side information-flow control.
+- **Phase 0 — scaffold.** ✅ Package, schemas, tests dir, examples.
+- **Phase 1 — static checker.** ✅ Subject/object/right exact-match hard-attention heads.
+- **Phase 2 — provenance & issuer trust.** ✅ Data has no authority.
+- **Phase 3 — high-risk escalation.** ✅ Confirmation tokens; ALLOW vs ESCALATE.
+- **Phase 4 — expiry & revocation.** ✅ Stale authority denied.
+- **Phase 5 — delegation & attenuation.** ✅ Weaker-only grants.
+- **Phase 6 — API gateway.** ✅ FastAPI endpoints, JSON schema, trace output.
+- **Phase 7 — exhaustive testing & fuzzing.** ✅ Exhaustive bounded enumeration plus
+  seeded property-based fuzzing (`tests/test_property_fuzz.py`): 8k randomized bundles
+  cross-checked against an independent reference oracle and a set of security invariants
+  (determinism, default-deny, data-has-no-authority, no-unconfirmed-high-risk-allow).
+- **Phase 8 — transformer compilation & hardening.** *In progress.*
+  - **8a — unforgeable capabilities.** ✅ Done. See §21. Capabilities are HMAC-signed by
+    the issuer; verification reduces to a per-token bit consumed by `head_signature_valid`.
+  - **8b+ — remaining.** Compile a richer capability calculus into fixed attention/FFN
+    matrices; formal verification of the reducer; asymmetric signatures / macaroons with
+    third-party caveats; real (sandboxed) tool adapters; session capability bundles;
+    output-side information-flow control.
+
+## 21. Phase 8a — unforgeable capabilities (signatures)
+
+v1 trusted a capability's `issuer` *label*, which is forgeable: untrusted text could
+claim `issuer="trusted_user"`. Phase 8a binds a capability's fields to an issuer secret
+with an HMAC-SHA256 signature (`capability_transformer/crypto.py`).
+
+- **Canonical payload.** `canonical_payload()` serializes the signed fields
+  (`id, subject, object, sorted(rights), issuer, expires_at (UTC ISO), scope, delegatable`)
+  deterministically, so semantically identical capabilities sign identically and any
+  tampering changes the payload.
+- **Keyring.** Only trusted issuers (`trusted_user`, `system`) hold keys. Untrusted
+  issuers have none and therefore cannot produce a valid signature — defense in depth
+  alongside `head_trusted_issuer`.
+- **Tensor-native verification.** Verification happens at tokenization and is reduced to
+  one Boolean bit (`SIG_OFF`) on the capability token, exactly like the expiry/revoked
+  bits. When `CapabilityTransformer(require_signatures=True)`, that bit joins the
+  capability-match conjunction and a dedicated head (`head_signature_valid`) reports
+  `invalid_signature` on failure. The enforcement path stays a pure tensor pipeline.
+- **Backward compatible.** Default engines keep v1 label-trust behavior; the new head is
+  inactive unless signatures are required.
+- **Mock note.** HMAC with a shared per-issuer secret is a *symmetric* mock suitable for a
+  single trusted verifier (the gateway). Production should use asymmetric signatures
+  (Ed25519) or macaroons so verifiers need no secret (Phase 8b+).
+
+API: `POST /mint` signs a capability with the demo keyring. See
+`examples/signed_capability_demo.py`.
 
 ## 19. Known limitations
 

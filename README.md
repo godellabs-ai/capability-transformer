@@ -86,6 +86,7 @@ python -m capability_transformer.api
 Endpoints:
 
 - `POST /evaluate` — evaluate a request bundle → decision + trace
+- `POST /mint`     — (Phase 8a) sign a capability with the demo issuer keyring
 - `GET  /health`   — liveness
 - `GET  /schema`   — bounded vocabularies + JSON schema
 - `GET  /examples` — bundled example requests
@@ -145,6 +146,33 @@ Add a trusted confirmation to the body above and the same request returns `ALLOW
 - **ESCALATE** — authority exists and all hard checks pass, but the action is
   **high-risk** (`gmail.send`, `slack.post`, `file.delete`, `secrets_db.read`,
   `browser.invoke`) and no trusted confirmation token is present. Route to a human.
+
+## Unforgeable capabilities (Phase 8a)
+
+By default the engine trusts a capability's `issuer` *label* (v1 behavior). To make
+capabilities **unforgeable**, run the engine with signature enforcement:
+
+```python
+from capability_transformer import CapabilityTransformer, Capability, crypto
+
+engine = CapabilityTransformer(require_signatures=True)
+cap = Capability(id="c1", subject="agent", object="file", rights=["read"],
+                 issuer="trusted_user", expires_at="2099-01-01T00:00:00Z")
+cap = cap.model_copy(update={"signature": crypto.mint(cap)})   # issuer signs it
+# A capability with a missing/forged/tampered signature now DENYs with
+# reason "invalid_signature" — even if every other field matches.
+```
+
+The signature is an HMAC-SHA256 over the capability's canonical fields; verification is
+reduced to a single Boolean bit consumed by the `head_signature_valid` hard-attention
+head, so the enforcement path stays a pure tensor pipeline. Run the demo:
+
+```bash
+PYTHONPATH=. python examples/signed_capability_demo.py
+```
+
+This is still a *mock* (symmetric, shared per-issuer secret). Production should use
+asymmetric signatures (Ed25519) or macaroons — see `implementation.md` §21 / Phase 8b.
 
 ## ⚠️ Warning — prototype, not production security
 

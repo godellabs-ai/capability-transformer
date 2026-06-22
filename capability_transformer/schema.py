@@ -38,6 +38,9 @@ class Capability(BaseModel):
     expires_at: datetime
     scope: dict[str, Any] = Field(default_factory=dict)
     delegatable: bool = False
+    # Phase 8a: hex HMAC signature binding these fields to the issuer key. Optional so
+    # unsigned bundles still validate; enforced only when the engine requires signatures.
+    signature: Optional[str] = None
 
 
 class Revocation(BaseModel):

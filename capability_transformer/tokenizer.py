@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 import numpy as np
 
 from . import compiled_weights as W
+from . import crypto
 from .schema import CapabilityBundle
 
 
@@ -28,6 +29,7 @@ class EncodedBundle:
     cap_ids: list[str]                  # capability id per capability token
     cap_scopes: list[dict]              # scope dict per capability token
     bundle: CapabilityBundle            # original bundle (for scope/delegation helpers)
+    require_signatures: bool = False    # whether the signature head gates the decision
 
 
 def _aware(dt: datetime) -> datetime:
@@ -61,8 +63,17 @@ def _set_slot(vec: np.ndarray, slot: str, one_hot: np.ndarray) -> None:
     vec[start:stop] = one_hot
 
 
-def encode(bundle: CapabilityBundle) -> EncodedBundle:
-    """Convert a bundle into the (N x D) token matrix and index metadata."""
+def encode(
+    bundle: CapabilityBundle,
+    *,
+    keyring=None,
+    require_signatures: bool = False,
+) -> EncodedBundle:
+    """Convert a bundle into the (N x D) token matrix and index metadata.
+
+    When ``require_signatures`` is set, each capability's HMAC signature is verified
+    against ``keyring`` and reduced to the per-token signature-valid bit.
+    """
     now = _aware(bundle.now) if bundle.now is not None else datetime.now(timezone.utc)
 
     rows: list[np.ndarray] = []
@@ -94,6 +105,13 @@ def encode(bundle: CapabilityBundle) -> EncodedBundle:
         vec[W.EXPIRY_OFF] = 1.0 if _aware(cap.expires_at) > now else 0.0
         vec[W.REVOKED_OFF] = 1.0 if _is_revoked(cap, bundle.revocations) else 0.0
         vec[W.DELEG_OFF] = 1.0 if cap.delegatable else 0.0
+        # Signature-valid bit. When not enforcing, the bit is set (1) and the signature
+        # head stays inactive; when enforcing, it reflects HMAC verification.
+        if require_signatures:
+            kr = keyring if keyring is not None else crypto.DEFAULT_KEYRING
+            vec[W.SIG_OFF] = 1.0 if crypto.verify(cap, keyring=kr) else 0.0
+        else:
+            vec[W.SIG_OFF] = 1.0
         cap_indices.append(len(rows))
         cap_ids.append(cap.id)
         cap_scopes.append(cap.scope or {})
@@ -124,4 +142,5 @@ def encode(bundle: CapabilityBundle) -> EncodedBundle:
         cap_ids=cap_ids,
         cap_scopes=cap_scopes,
         bundle=bundle,
+        require_signatures=require_signatures,
     )
