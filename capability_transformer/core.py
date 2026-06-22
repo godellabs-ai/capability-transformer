@@ -35,7 +35,7 @@ class CapabilityTransformer:
         )
         att = hard_attention.compute(encoded)
         decision, reasons = self._reduce(bundle, att)
-        trace = trace_mod.build_trace(bundle, att, decision, reasons)
+        trace = trace_mod.build_trace(bundle, encoded, att, decision, reasons)
         return Decision(decision=decision, reasons=reasons, trace=trace)
 
     # ----------------------------------------------------------------------------------
@@ -49,8 +49,12 @@ class CapabilityTransformer:
         scope_ok = heads["head_scope"].passed
         delegation_head = heads["head_delegation"]
         delegation_ok = delegation_head.passed or not delegation_head.relevant
-        sig_head = heads["head_signature_valid"]
-        sig_ok = sig_head.passed or not sig_head.relevant
+
+        # Crypto heads (Phase 8a/8b): signature, delegation chain, attenuation. Each only
+        # blocks matching, so its reason is reported in the no-match branch.
+        crypto_heads = [heads["head_signature_valid"], heads["head_chain_valid"],
+                        heads["head_attenuation_valid"]]
+        failed_crypto = [h.reason for h in crypto_heads if h.relevant and not h.passed]
 
         # ---- collect DENY reasons (return ALL failing codes, not just the first) -----
         reasons: list[str] = []
@@ -68,16 +72,16 @@ class CapabilityTransformer:
                 ]
                 if failed_matching:
                     reasons.extend(failed_matching)
-                elif sig_head.relevant and not sig_head.passed:
-                    # Forged: the six fields match but the signature does not.
-                    pass  # invalid_signature is appended below.
+                elif failed_crypto:
+                    # The six fields match but a crypto check (sig/chain/attenuation)
+                    # blocked it; those reasons are appended below.
+                    pass
                 else:
                     # Caps exist and every head individually passes, but no single cap
                     # satisfies all of them simultaneously: still a missing authority.
                     reasons.append("missing_capability")
 
-        if sig_head.relevant and not sig_head.passed:
-            reasons.append(sig_head.reason)
+        reasons.extend(failed_crypto)
 
         if not prov_ok:
             reasons.append(heads["head_provenance_safe"].reason)
@@ -88,7 +92,7 @@ class CapabilityTransformer:
         if not scope_ok:
             reasons.append(heads["head_scope"].reason)
 
-        required_ok = has_match and prov_ok and scope_ok and delegation_ok and sig_ok
+        required_ok = has_match and prov_ok and scope_ok and delegation_ok
 
         if not required_ok:
             return "DENY", _dedupe(reasons)

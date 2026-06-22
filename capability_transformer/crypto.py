@@ -1,19 +1,23 @@
-"""Phase 8a — unforgeable capabilities (mock issuer with real signatures).
+"""Phase 8a/8b — cryptographically authenticated capabilities.
 
-v1 trusted a capability's ``issuer`` *label*. That is forgeable: untrusted text could
-simply claim ``issuer="trusted_user"``. This module binds a capability's fields to an
-issuer's secret key with an HMAC-SHA256 signature, so a capability cannot be minted or
-mutated without the issuer key.
+This implements **cryptographically authenticated capabilities under a trusted
+symmetric-key issuer model** (HMAC-SHA256), plus **macaroon-style chained-HMAC
+attenuation** for delegated child capabilities. It is NOT a full macaroon library
+(no third-party/discharge caveats) and the symmetric key model is a single-verifier
+mock — production should use asymmetric signatures (Ed25519) or real macaroons. See
+implementation.md §21/§22.
 
-The signature is verified at tokenization time and reduced to a single Boolean bit on
-the capability token, exactly like the expiry and revoked bits — keeping the enforcement
-path a pure tensor pipeline. A dedicated hard-attention head (``head_signature_valid``)
-consumes that bit when signature enforcement is enabled.
+Two signing modes:
 
-Note: HMAC with a shared per-issuer secret is a *symmetric* mock suitable for a single
-trusted verifier (the gateway). A production system would use asymmetric signatures
-(e.g. Ed25519) or macaroons so that verifiers need no secret. See implementation.md
-Phase 8 / Future work.
+* **Root issuance** (`issue`): a trusted issuer signs a capability with its secret key,
+  selected by ``kid`` (key id) to support rotation.
+* **Delegated attenuation** (`sign_child` / verified by `verify_child`): the *holder* of a
+  parent capability derives a child by HMAC'ing the child's canonical payload (which
+  embeds ``parent_hash`` and the attenuated fields) under the *parent's signature* as the
+  key. No issuer key is needed to delegate; the gateway re-derives the chain.
+
+Verification is always reduced to Boolean bits on the capability token — the attention
+core never touches key material.
 """
 
 from __future__ import annotations
@@ -24,97 +28,120 @@ from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Mapping, Optional
 
-Keyring = Mapping[str, str]
-
-# A demo keyring. ONLY trusted issuers hold keys; untrusted issuers (document, web_page,
-# tool_output, model_generated) have none and therefore cannot produce a valid signature.
-# Replace with a real secret store in production.
-DEFAULT_KEYRING: dict[str, str] = {
-    "trusted_user": "demo-key::trusted_user::do-not-use-in-production",
-    "system": "demo-key::system::do-not-use-in-production",
+# A keyring maps an issuer to a set of versioned keys plus the currently active kid.
+# Only trusted issuers hold keys; untrusted issuers cannot produce a valid signature.
+# Replace with a real secret store (and asymmetric keys) in production.
+Keyring = Mapping[str, dict]
+DEFAULT_KEYRING: dict[str, dict] = {
+    "trusted_user": {
+        "keys": {"trusted_user-key-1": "demo-secret::trusted_user::v1::do-not-use"},
+        "active": "trusted_user-key-1",
+    },
+    "system": {
+        "keys": {"system-key-1": "demo-secret::system::v1::do-not-use"},
+        "active": "system-key-1",
+    },
 }
 
 
+def active_kid(issuer: str, keyring: Keyring = DEFAULT_KEYRING) -> str:
+    """Return the issuer's currently active key id (raises KeyError if no key)."""
+    return keyring[issuer]["active"]
+
+
+def _secret(issuer: str, kid: Optional[str], keyring: Keyring) -> str:
+    """Look up the secret for (issuer, kid); raises KeyError if unknown."""
+    return keyring[issuer]["keys"][kid]
+
+
 def _canonical_iso(dt: datetime) -> str:
-    """Normalize a datetime to a canonical UTC ISO-8601 string."""
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc).isoformat()
 
 
-def canonical_payload(
-    *,
-    id: str,
-    subject: str,
-    object: str,
-    rights,
-    issuer: str,
-    expires_at: datetime,
-    scope: Optional[dict] = None,
-    delegatable: bool = False,
-) -> str:
-    """Deterministic, order-independent serialization of the signed fields.
+def _payload_dict(cap) -> dict:
+    """All signed fields of a capability, in a deterministic, attenuation-covering form.
 
-    Rights are sorted and the scope dict is serialized with sorted keys so that two
-    semantically identical capabilities always produce the same payload.
+    The signature/hash binds every authority-relevant field, including the delegation
+    lineage (``parent_id``, ``parent_hash``) and limits (``delegation_depth``,
+    ``max_delegation_depth``). The ``signature`` itself is excluded so hashes are stable.
     """
-    payload = {
-        "id": id,
-        "subject": subject,
-        "object": object,
-        "rights": sorted(rights),
-        "issuer": issuer,
-        "expires_at": _canonical_iso(expires_at),
-        "scope": scope or {},
-        "delegatable": bool(delegatable),
+    return {
+        "id": cap.id,
+        "subject": cap.subject,
+        "object": cap.object,
+        "rights": sorted(cap.rights),
+        "issuer": cap.issuer,
+        "expires_at": _canonical_iso(cap.expires_at),
+        "scope": cap.scope or {},
+        "delegatable": bool(cap.delegatable),
+        "kid": getattr(cap, "kid", None),
+        "parent_id": getattr(cap, "parent_id", None),
+        "parent_hash": getattr(cap, "parent_hash", None),
+        "delegation_depth": getattr(cap, "delegation_depth", 0) or 0,
+        "max_delegation_depth": getattr(cap, "max_delegation_depth", None),
     }
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 
-def sign(payload: str, *, issuer: str, keyring: Keyring = DEFAULT_KEYRING) -> str:
-    """Return the hex HMAC-SHA256 signature for ``payload`` under the issuer key."""
-    key = keyring.get(issuer)
-    if key is None:
-        raise KeyError(f"no signing key for issuer {issuer!r}")
-    return hmac.new(key.encode(), payload.encode(), sha256).hexdigest()
+def canonical_payload(cap) -> str:
+    """Deterministic JSON serialization of the signed fields."""
+    return json.dumps(_payload_dict(cap), sort_keys=True, separators=(",", ":"))
 
 
+def capability_hash(cap) -> str:
+    """Stable SHA-256 over the canonical payload (safe to log; reveals no secret)."""
+    return sha256(canonical_payload(cap).encode()).hexdigest()
+
+
+def _hmac_hex(key: bytes, msg: str) -> str:
+    return hmac.new(key, msg.encode(), sha256).hexdigest()
+
+
+# ---- Root issuance ------------------------------------------------------------------
+def issue(cap, *, keyring: Keyring = DEFAULT_KEYRING):
+    """Return a signed copy of a root capability (populates ``kid`` and ``signature``)."""
+    kid = getattr(cap, "kid", None) or active_kid(cap.issuer, keyring)  # KeyError if untrusted
+    cap = cap.model_copy(update={"kid": kid})
+    secret = _secret(cap.issuer, kid, keyring)
+    signature = _hmac_hex(secret.encode(), canonical_payload(cap))
+    return cap.model_copy(update={"signature": signature})
+
+
+# Compatibility alias used by earlier examples/tests.
 def mint(cap, *, keyring: Keyring = DEFAULT_KEYRING) -> str:
-    """Sign a Capability (or capability-like object) and return its signature."""
-    payload = canonical_payload(
-        id=cap.id,
-        subject=cap.subject,
-        object=cap.object,
-        rights=cap.rights,
-        issuer=cap.issuer,
-        expires_at=cap.expires_at,
-        scope=cap.scope,
-        delegatable=cap.delegatable,
-    )
-    return sign(payload, issuer=cap.issuer, keyring=keyring)
+    """Sign a root capability and return its signature (issuer must be trusted)."""
+    return issue(cap, keyring=keyring).signature
 
 
 def verify(cap, *, keyring: Keyring = DEFAULT_KEYRING) -> bool:
-    """Return True iff ``cap.signature`` is a valid HMAC for ``cap`` under its issuer key.
+    """Verify a *root* capability's issuer HMAC signature.
 
-    Returns False for missing signatures, unknown issuers (no key), and any tampering
-    with the signed fields.
+    False for missing signature/kid, unknown issuer or kid (no key), and any tampering.
     """
     signature = getattr(cap, "signature", None)
-    if not signature:
+    kid = getattr(cap, "kid", None)
+    if not signature or not kid:
         return False
-    key = keyring.get(cap.issuer)
-    if key is None:
+    try:
+        secret = _secret(cap.issuer, kid, keyring)
+    except KeyError:
         return False
-    payload = canonical_payload(
-        id=cap.id,
-        subject=cap.subject,
-        object=cap.object,
-        rights=cap.rights,
-        issuer=cap.issuer,
-        expires_at=cap.expires_at,
-        scope=cap.scope,
-        delegatable=cap.delegatable,
-    )
-    expected = hmac.new(key.encode(), payload.encode(), sha256).hexdigest()
+    expected = _hmac_hex(secret.encode(), canonical_payload(cap))
     return hmac.compare_digest(expected, signature)
+
+
+# ---- Delegated (chained-HMAC) attenuation -------------------------------------------
+def sign_child(parent_signature: str, child) -> str:
+    """Derive a child signature: HMAC over the child payload, keyed by the parent sig."""
+    return _hmac_hex(parent_signature.encode(), canonical_payload(child))
+
+
+def verify_child(child, parent) -> bool:
+    """Verify the chained-HMAC link from ``parent`` to ``child``."""
+    parent_sig = getattr(parent, "signature", None)
+    child_sig = getattr(child, "signature", None)
+    if not parent_sig or not child_sig:
+        return False
+    expected = _hmac_hex(parent_sig.encode(), canonical_payload(child))
+    return hmac.compare_digest(expected, child_sig)

@@ -147,32 +147,55 @@ Add a trusted confirmation to the body above and the same request returns `ALLOW
   **high-risk** (`gmail.send`, `slack.post`, `file.delete`, `secrets_db.read`,
   `browser.invoke`) and no trusted confirmation token is present. Route to a human.
 
-## Unforgeable capabilities (Phase 8a)
+## Cryptographically authenticated & attenuable capabilities (Phase 8a/8b)
 
-By default the engine trusts a capability's `issuer` *label* (v1 behavior). To make
-capabilities **unforgeable**, run the engine with signature enforcement:
+By default the engine trusts a capability's `issuer` *label* (v1 behavior). Run with
+signature enforcement to get **cryptographically authenticated capabilities under a
+trusted symmetric-key issuer model**:
 
 ```python
 from capability_transformer import CapabilityTransformer, Capability, crypto
 
 engine = CapabilityTransformer(require_signatures=True)
-cap = Capability(id="c1", subject="agent", object="file", rights=["read"],
+cap = Capability(id="c1", subject="agent", object="file", rights=["read", "delegate"],
                  issuer="trusted_user", expires_at="2099-01-01T00:00:00Z")
-cap = cap.model_copy(update={"signature": crypto.mint(cap)})   # issuer signs it
+cap = crypto.issue(cap)   # issuer signs it (populates kid + signature)
 # A capability with a missing/forged/tampered signature now DENYs with
 # reason "invalid_signature" — even if every other field matches.
 ```
 
-The signature is an HMAC-SHA256 over the capability's canonical fields; verification is
-reduced to a single Boolean bit consumed by the `head_signature_valid` hard-attention
-head, so the enforcement path stays a pure tensor pipeline. Run the demo:
+In signed mode the failure semantics are explicit and unambiguous:
+
+| situation                         | decision / reason          |
+|-----------------------------------|----------------------------|
+| unsigned cap, trusted issuer      | `DENY [invalid_signature]` |
+| malformed / forged signature      | `DENY [invalid_signature]` |
+| unknown / untrusted issuer        | `DENY [issuer_not_trusted]`|
+
+**Attenuable delegation (Phase 8b, macaroon-style chained HMAC).** The *holder* of a
+capability can mint an attenuated child offline — no issuer key needed — and the gateway
+re-derives the chain:
+
+```python
+from capability_transformer.delegated_capability import mint_child
+
+child = mint_child(cap, id="c2", subject="agent", rights=["read"])  # weaker-or-equal only
+# Child rights ⊆ parent, expiry ≤ parent, scope not widened, subject change needs
+# `delegate`. Tampering breaks the signature; revoking/expiring the parent kills the
+# child. Trace exposes delegation_chain_valid / attenuation_valid / parent_hash.
+```
+
+Each crypto check is reduced to a Boolean bit (`signature`, `chain`, `attenuation`)
+consumed by the `head_signature_valid`, `head_chain_valid` and `head_attenuation_valid`
+hard-attention heads — so the enforcement path stays a pure tensor pipeline. Run the demo:
 
 ```bash
 PYTHONPATH=. python examples/signed_capability_demo.py
 ```
 
-This is still a *mock* (symmetric, shared per-issuer secret). Production should use
-asymmetric signatures (Ed25519) or macaroons — see `implementation.md` §21 / Phase 8b.
+This remains a *mock*: a symmetric, shared per-issuer secret with a single verifier, and
+a subset of macaroon semantics (no third-party/discharge caveats). Production should use
+asymmetric signatures (Ed25519) or real macaroons — see `implementation.md` §21–§22.
 
 ## ⚠️ Warning — prototype, not production security
 

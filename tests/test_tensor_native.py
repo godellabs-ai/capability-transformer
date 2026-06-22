@@ -5,8 +5,19 @@ import inspect
 import numpy as np
 
 from capability_transformer import compiled_weights as W
-from capability_transformer import core, hard_attention, tokenizer
+from capability_transformer import (
+    attenuation,
+    core,
+    crypto,
+    delegated_capability,
+    hard_attention,
+    tokenizer,
+)
 from conftest import bundle, cap
+
+ENFORCEMENT_MODULES = (
+    hard_attention, core, tokenizer, crypto, delegated_capability, attenuation,
+)
 
 
 def test_tokenizer_produces_token_matrix():
@@ -38,14 +49,14 @@ def test_deterministic_repeated_output(engine):
 def test_no_softmax_used_for_enforcement():
     # No softmax / exponential normalization is *called* anywhere on the enforcement
     # path. (Docstrings may mention the word to explain why it is avoided.)
-    for mod in (hard_attention, core, tokenizer):
+    for mod in ENFORCEMENT_MODULES:
         src = inspect.getsource(mod).lower()
         for forbidden in ("softmax(", "np.exp", ".exp(", "logsumexp", "nn.functional"):
             assert forbidden not in src
 
 
 def test_no_training_code():
-    for mod in (hard_attention, core, tokenizer, W):
+    for mod in ENFORCEMENT_MODULES + (W,):
         src = inspect.getsource(mod).lower()
         for forbidden in ("backward", "loss.backward", "optimizer", "requires_grad", "torch.nn"):
             assert forbidden not in src

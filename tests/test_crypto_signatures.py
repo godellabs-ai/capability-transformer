@@ -11,7 +11,7 @@ from conftest import FUTURE
 def _signed_cap(rights=("read",), object="file", subject="agent", issuer="trusted_user", **over):
     cap = Capability(id="cap1", subject=subject, object=object, rights=list(rights),
                      issuer=issuer, expires_at=FUTURE, scope={}, delegatable=False, **over)
-    return cap.model_copy(update={"signature": crypto.mint(cap)})
+    return crypto.issue(cap)  # populates kid + signature
 
 
 def _bundle(cap, action="read", object="file", subject="agent", provenance="trusted_user"):

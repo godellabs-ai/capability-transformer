@@ -107,40 +107,57 @@ def compute(enc: EncodedBundle) -> AttentionResult:
         )
 
     # Security boundary: element-wise AND across the six heads, OR across capabilities.
+    require = enc.require_signatures
     if n_caps:
         core_mask = subj_mask & obj_mask & right_mask & issuer_mask & expiry_mask & not_revoked_mask
-        sig_mask = _bool(C[:, W.SIG_OFF])
+        sig_mask = _bool(C[:, W.SIG_OFF])           # Phase 8a: signature valid
+        chain_mask = _bool(C[:, W.CHAIN_OFF])       # Phase 8b: delegation chain valid
+        atten_mask = _bool(C[:, W.ATTEN_OFF])       # Phase 8b: attenuation valid
+        del_mask = np.asarray(enc.cap_delegated, dtype=bool)
+        # Chain/attenuation only constrain delegated children; roots pass trivially.
+        chain_ok = chain_mask | ~del_mask
+        atten_ok = atten_mask | ~del_mask
     else:
-        core_mask = np.zeros(0, bool)
-        sig_mask = np.zeros(0, bool)
+        core_mask = sig_mask = chain_mask = atten_mask = np.zeros(0, bool)
+        del_mask = chain_ok = atten_ok = np.zeros(0, bool)
 
-    # Phase 8a: when signatures are enforced, an unsigned/forged capability cannot be a
-    # valid match — the signature-valid bit joins the conjunction.
-    if enc.require_signatures and n_caps:
-        matched_mask = core_mask & sig_mask
+    # When signatures are enforced, a capability is a valid match only if its crypto bits
+    # also hold: valid signature, valid chain (if delegated), valid attenuation.
+    if require and n_caps:
+        matched_mask = core_mask & sig_mask & chain_ok & atten_ok
     else:
         matched_mask = core_mask
     matched_cap_ids = [cap_ids[i] for i in np.nonzero(matched_mask)[0]] if n_caps else []
+    has_match = bool(matched_mask.any()) if n_caps else False
 
-    # ---- Head 11 (Phase 8a): signature-valid -----------------------------------------
-    # Relevant only when signatures are enforced. It fails when a capability would
-    # otherwise match on all six fields but carries no valid issuer signature (forged).
-    has_core = bool(core_mask.any()) if n_caps else False
-    if not enc.require_signatures:
-        sig_passed = True
-    elif not has_core:
-        # Some other head explains the denial; don't blame the signature spuriously.
-        sig_passed = True
-    else:
-        sig_passed = bool((core_mask & sig_mask).any())
-    heads["head_signature_valid"] = HeadResult(
-        name="head_signature_valid",
-        passed=sig_passed,
-        per_cap_mask=sig_mask if n_caps else np.zeros(0, bool),
-        matched_cap_ids=[cap_ids[i] for i in np.nonzero(core_mask & sig_mask)[0]] if n_caps else [],
-        reason=None if sig_passed else W.HEAD_REASON["head_signature_valid"],
-        relevant=enc.require_signatures,
-    )
+    # ---- Crypto heads (Phase 8a/8b) --------------------------------------------------
+    # A crypto head fails when NO capability fully matched AND some capability that does
+    # match the six core fields is blocked by this bit. Several crypto checks can fail at
+    # once (e.g. a tampered child breaks both signature and attenuation) — we report all.
+    def _crypto_head(name, own_mask, applies_mask, relevant):
+        if n_caps:
+            blocked = core_mask & applies_mask & ~own_mask
+            passed = (not relevant) or has_match or (not bool(blocked.any()))
+            ids = [cap_ids[i] for i in np.nonzero(matched_mask & own_mask)[0]]
+        else:
+            passed, ids = True, []
+        return HeadResult(
+            name=name,
+            passed=passed,
+            per_cap_mask=own_mask if n_caps else np.zeros(0, bool),
+            matched_cap_ids=ids,
+            reason=None if passed else W.HEAD_REASON[name],
+            relevant=relevant,
+        )
+
+    all_true = np.ones(n_caps, bool) if n_caps else np.zeros(0, bool)
+    has_delegated = bool(del_mask.any()) if n_caps else False
+    heads["head_signature_valid"] = _crypto_head(
+        "head_signature_valid", sig_mask, all_true, require)
+    heads["head_chain_valid"] = _crypto_head(
+        "head_chain_valid", chain_mask, del_mask, require and has_delegated)
+    heads["head_attenuation_valid"] = _crypto_head(
+        "head_attenuation_valid", atten_mask, del_mask, require and has_delegated)
 
     # ---- Head 7: provenance-safe -----------------------------------------------------
     # Untrusted data may drive a passive read but never a side effect.

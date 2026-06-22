@@ -41,14 +41,14 @@ def evaluate(bundle: CapabilityBundle) -> Decision:
 def mint(cap: Capability) -> Capability:
     """Phase 8a: sign a capability with the demo issuer keyring.
 
-    Returns the capability with its ``signature`` field populated. Only trusted issuers
-    (``trusted_user``, ``system``) hold keys; minting for any other issuer fails with 422.
+    Returns the capability with its ``kid`` and ``signature`` populated. Only trusted
+    issuers (``trusted_user``, ``system``) hold keys; minting for any other issuer fails
+    with 422.
     """
     try:
-        signature = crypto.mint(cap)
+        return crypto.issue(cap)
     except KeyError as exc:  # unknown / untrusted issuer has no signing key
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return cap.model_copy(update={"signature": signature})
 
 
 @app.get("/schema")

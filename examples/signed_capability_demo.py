@@ -19,7 +19,7 @@ def signed(**over) -> Capability:
                 issuer="trusted_user", expires_at=FUTURE)
     base.update(over)
     cap = Capability(**base)
-    return cap.model_copy(update={"signature": crypto.mint(cap)})
+    return crypto.issue(cap)  # populates kid + signature
 
 
 def request(cap: Capability, action="read") -> CapabilityBundle:

@@ -237,7 +237,9 @@ head is a pure tensor expression returning a Boolean mask over capabilities:
 | 8 | `head_confirmation`   | high-risk ⇒ ∃ matching trusted confirmation token  | `confirmation_required` |
 | 9 | `head_scope`          | matched cap's scope ⊆ request scope                 | `scope_violation`     |
 | 10| `head_delegation`     | action==delegate ⇒ ∃ valid cap with `delegate` ∧ target right | `delegation_not_allowed` |
-| 11| `head_signature_valid`| (Phase 8a) signatures enforced ⇒ a matching cap carries a valid issuer HMAC | `invalid_signature` |
+| 11| `head_signature_valid`| (Phase 8a) signatures enforced ⇒ a matching cap carries a valid issuer/chained HMAC | `invalid_signature` |
+| 12| `head_chain_valid`    | (Phase 8b) delegated child ⇒ parent present, hash matches, parent valid & holds `delegate`, depth ok | `delegation_chain_invalid` |
+| 13| `head_attenuation_valid`| (Phase 8b) delegated child ⇒ rights/scope/expiry/subject/re-delegation all ≤ parent | `attenuation_violation` |
 
 The **matched-capability mask** is the element-wise AND of heads 1–6:
 
@@ -344,45 +346,115 @@ or a delegation request), so the common case mirrors the canonical example exact
   cross-checked against an independent reference oracle and a set of security invariants
   (determinism, default-deny, data-has-no-authority, no-unconfirmed-high-risk-allow).
 - **Phase 8 — transformer compilation & hardening.** *In progress.*
-  - **8a — unforgeable capabilities.** ✅ Done. See §21. Capabilities are HMAC-signed by
-    the issuer; verification reduces to a per-token bit consumed by `head_signature_valid`.
-  - **8b+ — remaining.** Compile a richer capability calculus into fixed attention/FFN
-    matrices; formal verification of the reducer; asymmetric signatures / macaroons with
-    third-party caveats; real (sandboxed) tool adapters; session capability bundles;
-    output-side information-flow control.
+  - **8a — cryptographically authenticated capabilities.** ✅ Done. See §21. Capabilities
+    are HMAC-signed by the issuer (with `kid` key rotation); verification reduces to a
+    per-token bit consumed by `head_signature_valid`.
+  - **8b — attenuable delegated capabilities.** ✅ Done. See §22. Macaroon-style
+    chained-HMAC child capabilities, verified into `head_chain_valid` /
+    `head_attenuation_valid`.
+  - **8c — gated mock tool runtime.** Next. A tool runtime that refuses to execute
+    without a fresh `ALLOW` from the gateway (turns the evaluator into an enforcement
+    boundary).
+  - **8d–8f — remaining.** Action-hash-bound confirmations; tamper-evident audit log;
+    output-side information-flow prototype. Plus longer-term: compile a richer capability
+    calculus into fixed attention/FFN matrices; formal verification of the reducer;
+    asymmetric signatures / real macaroons with third-party caveats.
 
-## 21. Phase 8a — unforgeable capabilities (signatures)
+## 21. Phase 8a — cryptographically authenticated capabilities
 
 v1 trusted a capability's `issuer` *label*, which is forgeable: untrusted text could
 claim `issuer="trusted_user"`. Phase 8a binds a capability's fields to an issuer secret
-with an HMAC-SHA256 signature (`capability_transformer/crypto.py`).
+with an HMAC-SHA256 signature (`capability_transformer/crypto.py`). This is
+**cryptographically authenticated capabilities under a trusted symmetric-key issuer
+model** — not an unqualified "unforgeable" claim (see Mock note).
 
-- **Canonical payload.** `canonical_payload()` serializes the signed fields
-  (`id, subject, object, sorted(rights), issuer, expires_at (UTC ISO), scope, delegatable`)
-  deterministically, so semantically identical capabilities sign identically and any
-  tampering changes the payload.
-- **Keyring.** Only trusted issuers (`trusted_user`, `system`) hold keys. Untrusted
-  issuers have none and therefore cannot produce a valid signature — defense in depth
-  alongside `head_trusted_issuer`.
+- **Canonical payload.** `canonical_payload()` serializes *all* authority-relevant fields
+  deterministically (`id, subject, object, sorted(rights), issuer, expires_at (UTC ISO),
+  scope, delegatable, kid, parent_id, parent_hash, delegation_depth, max_delegation_depth`),
+  so semantically identical capabilities sign identically and any tampering changes the
+  payload.
+- **Keyring & key rotation.** The keyring is `{ issuer: { keys: {kid: secret}, active: kid } }`.
+  Each capability records the `kid` it was signed with, so keys can be rotated without
+  invalidating old grants. Only trusted issuers (`trusted_user`, `system`) hold keys;
+  untrusted issuers cannot produce a valid signature — defense in depth alongside
+  `head_trusted_issuer`.
 - **Tensor-native verification.** Verification happens at tokenization and is reduced to
   one Boolean bit (`SIG_OFF`) on the capability token, exactly like the expiry/revoked
   bits. When `CapabilityTransformer(require_signatures=True)`, that bit joins the
-  capability-match conjunction and a dedicated head (`head_signature_valid`) reports
-  `invalid_signature` on failure. The enforcement path stays a pure tensor pipeline.
-- **Backward compatible.** Default engines keep v1 label-trust behavior; the new head is
+  capability-match conjunction and `head_signature_valid` reports `invalid_signature`.
+- **Explicit failure semantics (signed mode).** Unambiguous by construction:
+  - unsigned cap, trusted issuer → `DENY [invalid_signature]`
+  - malformed / forged signature → `DENY [invalid_signature]`
+  - unknown / untrusted issuer → `DENY [issuer_not_trusted]` (the trusted-issuer head
+    explains it; the signature head is suppressed so the reason is not ambiguous)
+- **Trace metadata (no secrets).** `trace.signature = { required, capabilities: [{ id,
+  issuer, kid, valid, payload_sha256 }] }`. `payload_sha256` is the canonical-payload
+  hash — auditable, reveals no key material.
+- **Backward compatible.** Default engines keep v1 label-trust behavior; the head is
   inactive unless signatures are required.
 - **Mock note.** HMAC with a shared per-issuer secret is a *symmetric* mock suitable for a
   single trusted verifier (the gateway). Production should use asymmetric signatures
-  (Ed25519) or macaroons so verifiers need no secret (Phase 8b+).
+  (Ed25519) or macaroons so verifiers need no secret.
 
 API: `POST /mint` signs a capability with the demo keyring. See
 `examples/signed_capability_demo.py`.
 
+## 22. Phase 8b — attenuable delegated capabilities
+
+Delegation lets the *holder* of a capability hand a **weaker-or-equal** subset to another
+subject. We implement a careful subset of macaroons — **chained-HMAC attenuation** — not
+the full scheme (no third-party / discharge caveats). Modules:
+`delegated_capability.py` (chain build + verify) and `attenuation.py` (restriction checks).
+
+- **Chained-HMAC signatures.** `mint_child(parent, …)` derives a child whose signature is
+  `HMAC(key = parent.signature, msg = canonical_payload(child))`. The child embeds
+  `parent_id` and `parent_hash = capability_hash(parent)`. Crucially, **delegation needs
+  no issuer key** — anyone holding the parent (hence the parent signature) can attenuate;
+  the gateway re-derives the chain from root to leaf. Multi-hop chains are supported up to
+  `max_delegation_depth`.
+- **Attenuation is recomputed, never trusted.** A self-asserted `rights_subset: true` on a
+  token is worthless, so the gateway recomputes (`attenuation.check`): child rights ⊆
+  parent; child object identical; child scope not widened; child expiry ≤ parent; subject
+  change requires parent `delegate`; child may be re-delegatable only with parent
+  `delegate` and remaining depth budget.
+- **Chain validity.** A child is chain-valid only if its parent is present, `parent_hash`
+  matches, the parent is itself fully valid (signature, trusted issuer, not expired, not
+  revoked), the parent holds `delegate`, and depth ≤ `max_delegation_depth`. Hence
+  **revoking or expiring a parent invalidates every descendant**.
+- **Tensor-native verification.** `verify_bundle()` collapses each capability to three
+  bits — `SIG_OFF`, `CHAIN_OFF`, `ATTEN_OFF` — written onto the token matrix. Two
+  dedicated heads consume them: `head_chain_valid` (`delegation_chain_invalid`) and
+  `head_attenuation_valid` (`attenuation_violation`). The attention core never touches
+  key material or chain logic; it only ANDs bits.
+- **Trace metadata.** `trace.delegation = { delegation_chain_valid, attenuation_valid,
+  chains: [{ capability_id, parent_capability_id, parent_hash, chain_valid,
+  attenuation_valid, failed_restrictions, chain_error }] }`.
+- **Scope.** Delegated verification is active only in signed mode
+  (`require_signatures=True`); in label-trust mode `parent_*` fields are ignored.
+
+Acceptance criteria (all covered by `tests/test_delegated_capability.py`): parent
+`read,delegate` can mint child `read` but not `write`; a parent without `delegate` cannot
+hand authority to another subject; a child cannot outlive, widen the scope of, or
+re-delegate beyond its parent; tampering a child field breaks the signature; tampering
+`parent_hash` breaks the chain; revoking/expiring the parent kills the child.
+
+## 23. Future work (post-8b)
+
+- **8c — gated mock tool runtime.** A tool runtime that executes only on a fresh `ALLOW`,
+  fail-closed. This turns the evaluator into an actual enforcement boundary.
+- **8d — action-hash-bound confirmations.** Bind a confirmation token to the hash of the
+  exact action it approves, preventing confirmation replay across actions.
+- **8e — tamper-evident audit log.** Hash-chained decision log.
+- **8f — output-side information-flow prototype.** Taint tracking on tool outputs.
+- Longer term: compile a richer capability calculus into fixed attention/FFN matrices;
+  formal verification of the reducer; asymmetric signatures / real macaroons.
+
 ## 19. Known limitations
 
 - Bounded universe only (5 subjects, 6 objects, 8 rights).
-- Issuer trust is a *mock*: there is no signature verification yet, only an
-  issuer-label check. A real system must verify unforgeable cryptographic grants.
+- Capabilities are HMAC-signed (Phase 8a) but under a *symmetric, single-verifier mock*
+  keyring; the default engine still runs in label-trust mode unless
+  `require_signatures=True`. Production needs asymmetric/macaroon grants.
 - Expiry uses wall-clock `now` unless `now` is supplied; revocation is by id/field
   match, not a distributed revocation ledger.
 - Scope matching is a minimal key/value subset check.

@@ -13,8 +13,10 @@ from datetime import datetime, timezone
 import numpy as np
 
 from . import compiled_weights as W
-from . import crypto
+from . import crypto, delegated_capability
 from .schema import CapabilityBundle
+from .util import aware as _aware
+from .util import is_revoked as _is_revoked
 
 
 @dataclass
@@ -30,28 +32,8 @@ class EncodedBundle:
     cap_scopes: list[dict]              # scope dict per capability token
     bundle: CapabilityBundle            # original bundle (for scope/delegation helpers)
     require_signatures: bool = False    # whether the signature head gates the decision
-
-
-def _aware(dt: datetime) -> datetime:
-    """Normalize to a timezone-aware UTC datetime for safe comparison."""
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
-
-
-def _is_revoked(cap, revocations) -> bool:
-    """A capability is revoked if any revocation matches it by id or by fields."""
-    for rev in revocations:
-        if rev.capability_id is not None:
-            if rev.capability_id == cap.id:
-                return True
-            continue
-        # Field-based revocation: revoke all caps matching the given subject/object.
-        subj_ok = rev.subject is None or rev.subject == cap.subject
-        obj_ok = rev.object is None or rev.object == cap.object
-        if subj_ok and obj_ok and (rev.subject is not None or rev.object is not None):
-            return True
-    return False
+    cap_delegated: list[bool] = field(default_factory=list)  # is each cap a child?
+    cap_meta: list[dict] = field(default_factory=list)       # per-cap audit metadata
 
 
 def _blank() -> np.ndarray:
@@ -91,10 +73,23 @@ def encode(
     rows.append(req)
     row_types.append("request")
 
+    # ---- delegation / signature verification (Phase 8a/8b) ---------------------------
+    # The whole chain is verified here (helper code), then collapsed to per-token bits so
+    # the attention core only ever sees a deterministic tensor. In label-trust mode
+    # (require_signatures=False) signatures and parent links are ignored.
+    kr = keyring if keyring is not None else crypto.DEFAULT_KEYRING
+    verdicts = (
+        delegated_capability.verify_bundle(bundle, keyring=kr, now=now)
+        if require_signatures
+        else {}
+    )
+
     # ---- capability (key/value) tokens -----------------------------------------------
     cap_indices: list[int] = []
     cap_ids: list[str] = []
     cap_scopes: list[dict] = []
+    cap_delegated: list[bool] = []
+    cap_meta: list[dict] = []
     for cap in bundle.capabilities:
         vec = _blank()
         _set_slot(vec, "type", W.one_hot(W.TYPE_IDX, "capability", W.N_TYPE))
@@ -105,16 +100,36 @@ def encode(
         vec[W.EXPIRY_OFF] = 1.0 if _aware(cap.expires_at) > now else 0.0
         vec[W.REVOKED_OFF] = 1.0 if _is_revoked(cap, bundle.revocations) else 0.0
         vec[W.DELEG_OFF] = 1.0 if cap.delegatable else 0.0
-        # Signature-valid bit. When not enforcing, the bit is set (1) and the signature
-        # head stays inactive; when enforcing, it reflects HMAC verification.
+
+        is_delegated = cap.parent_id is not None
         if require_signatures:
-            kr = keyring if keyring is not None else crypto.DEFAULT_KEYRING
-            vec[W.SIG_OFF] = 1.0 if crypto.verify(cap, keyring=kr) else 0.0
+            v = verdicts[cap.id]
+            is_delegated = v.is_delegated
+            vec[W.SIG_OFF] = 1.0 if v.sig_valid else 0.0
+            vec[W.CHAIN_OFF] = 1.0 if v.chain_valid else 0.0
+            vec[W.ATTEN_OFF] = 1.0 if v.atten_valid else 0.0
+            meta = {
+                "id": cap.id, "issuer": cap.issuer, "kid": cap.kid,
+                "payload_sha256": crypto.capability_hash(cap),
+                "signature_valid": v.sig_valid, "delegated": v.is_delegated,
+                "parent_capability_id": v.parent_id, "parent_hash": v.parent_hash,
+                "chain_valid": v.chain_valid, "attenuation_valid": v.atten_valid,
+                "failed_restrictions": v.failed_restrictions, "chain_error": v.chain_error,
+            }
         else:
+            # Not enforcing: all crypto bits set; delegation links ignored.
             vec[W.SIG_OFF] = 1.0
+            vec[W.CHAIN_OFF] = 1.0
+            vec[W.ATTEN_OFF] = 1.0
+            is_delegated = False
+            meta = {"id": cap.id, "issuer": cap.issuer, "kid": cap.kid,
+                    "payload_sha256": crypto.capability_hash(cap)}
+
         cap_indices.append(len(rows))
         cap_ids.append(cap.id)
         cap_scopes.append(cap.scope or {})
+        cap_delegated.append(is_delegated)
+        cap_meta.append(meta)
         rows.append(vec)
         row_types.append("capability")
 
@@ -143,4 +158,6 @@ def encode(
         cap_scopes=cap_scopes,
         bundle=bundle,
         require_signatures=require_signatures,
+        cap_delegated=cap_delegated,
+        cap_meta=cap_meta,
     )

@@ -41,6 +41,15 @@ class Capability(BaseModel):
     # Phase 8a: hex HMAC signature binding these fields to the issuer key. Optional so
     # unsigned bundles still validate; enforced only when the engine requires signatures.
     signature: Optional[str] = None
+    # Phase 8a: key id used to sign (supports issuer key rotation).
+    kid: Optional[str] = None
+    # Phase 8b: delegated (attenuated child) capability lineage. A root capability leaves
+    # parent_* as None. A child references its parent's id and content hash, and its
+    # signature is a chained HMAC under the parent signature.
+    parent_id: Optional[str] = None
+    parent_hash: Optional[str] = None
+    delegation_depth: int = 0
+    max_delegation_depth: Optional[int] = None
 
 
 class Revocation(BaseModel):
@@ -94,6 +103,10 @@ class Trace(BaseModel):
     failed_heads: list[str] = Field(default_factory=list)
     heads: list[HeadTrace] = Field(default_factory=list)
     request: dict[str, Any] = Field(default_factory=dict)
+    # Phase 8a: per-capability signature metadata (no secret material).
+    signature: dict[str, Any] = Field(default_factory=dict)
+    # Phase 8b: delegation chain / attenuation audit.
+    delegation: dict[str, Any] = Field(default_factory=dict)
     engine: str = "hard-attention-v1"
     softmax_used: bool = False
     trained: bool = False

@@ -1,14 +1,17 @@
 """Audit trace rendering.
 
-Heads 1-7 are always reported (they always gate matching/provenance). Heads 8-10
-(confirmation, scope, delegation) are reported only when they actually participate in
-the decision, so the common case mirrors the canonical example trace exactly.
+Heads 1-7 are always reported (they always gate matching/provenance). The remaining
+heads (signature, chain, attenuation, confirmation, scope, delegation) are reported only
+when they actually participate in the decision, so the common case mirrors the canonical
+example trace exactly. Crypto metadata (signature/delegation blocks) contains hashes and
+booleans only — never secret material.
 """
 
 from __future__ import annotations
 
 from .hard_attention import AttentionResult
 from .schema import CapabilityBundle, HeadTrace, Trace
+from .tokenizer import EncodedBundle
 
 # Heads that always appear in the trace, in canonical order.
 ALWAYS_HEADS = [
@@ -20,16 +23,17 @@ ALWAYS_HEADS = [
     "head_not_revoked",
     "head_provenance_safe",
 ]
-# Heads that appear only when relevant.
-CONDITIONAL_HEADS = ["head_confirmation", "head_scope", "head_delegation"]
 
 
 def _included_head_names(att: AttentionResult, required_ok: bool) -> list[str]:
     names = list(ALWAYS_HEADS)
-    # Signature enforcement (Phase 8a) is a matching-style gate; show it next to the
-    # other matching heads whenever it is active.
+    # Crypto heads (Phase 8a/8b) are matching-style gates; show them whenever active.
     if att.heads["head_signature_valid"].relevant:
         names.append("head_signature_valid")
+    if att.heads["head_chain_valid"].relevant:
+        names.append("head_chain_valid")
+    if att.heads["head_attenuation_valid"].relevant:
+        names.append("head_attenuation_valid")
     # Confirmation only gates once the required hard checks have passed.
     if att.heads["head_confirmation"].relevant and required_ok:
         names.append("head_confirmation")
@@ -40,8 +44,46 @@ def _included_head_names(att: AttentionResult, required_ok: bool) -> list[str]:
     return names
 
 
+def _signature_block(enc: EncodedBundle) -> dict:
+    if not enc.require_signatures:
+        return {"required": False}
+    caps = []
+    for meta in enc.cap_meta:
+        caps.append({
+            "id": meta.get("id"),
+            "issuer": meta.get("issuer"),
+            "kid": meta.get("kid"),
+            "valid": meta.get("signature_valid"),
+            "payload_sha256": meta.get("payload_sha256"),
+        })
+    return {"required": True, "capabilities": caps}
+
+
+def _delegation_block(enc: EncodedBundle, att: AttentionResult) -> dict:
+    chains = []
+    for meta in enc.cap_meta:
+        if meta.get("delegated"):
+            chains.append({
+                "capability_id": meta.get("id"),
+                "parent_capability_id": meta.get("parent_capability_id"),
+                "parent_hash": meta.get("parent_hash"),
+                "chain_valid": meta.get("chain_valid"),
+                "attenuation_valid": meta.get("attenuation_valid"),
+                "failed_restrictions": meta.get("failed_restrictions", []),
+                "chain_error": meta.get("chain_error"),
+            })
+    if not chains:
+        return {}
+    return {
+        "delegation_chain_valid": att.heads["head_chain_valid"].passed,
+        "attenuation_valid": att.heads["head_attenuation_valid"].passed,
+        "chains": chains,
+    }
+
+
 def build_trace(
     bundle: CapabilityBundle,
+    enc: EncodedBundle,
     att: AttentionResult,
     decision: str,
     reasons: list[str],
@@ -82,6 +124,8 @@ def build_trace(
             "source_provenance": bundle.source_provenance,
             "high_risk": att.high_risk,
         },
+        signature=_signature_block(enc),
+        delegation=_delegation_block(enc, att),
         engine="hard-attention-v1",
         softmax_used=False,
         trained=False,
