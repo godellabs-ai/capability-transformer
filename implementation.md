@@ -234,7 +234,7 @@ head is a pure tensor expression returning a Boolean mask over capabilities:
 | 5 | `head_not_expired`    | `C_expiry_bit == 1`                                 | `expired_capability`  |
 | 6 | `head_not_revoked`    | `C_revoked_bit == 0`                                | `revoked_capability`  |
 | 7 | `head_provenance_safe`| `q_prov · trusted_prov_mask ≥ 1` OR `q_action == read` | `data_has_no_authority` |
-| 8 | `head_confirmation`   | high-risk ⇒ ∃ matching trusted confirmation token  | `confirmation_required` |
+| 8 | `head_confirmation`   | high-risk ⇒ ∃ matching trusted confirmation (Phase 8d: action-bound) | `confirmation_required` |
 | 9 | `head_scope`          | matched cap's scope ⊆ request scope                 | `scope_violation`     |
 | 10| `head_delegation`     | action==delegate ⇒ ∃ valid cap with `delegate` ∧ target right | `delegation_not_allowed` |
 | 11| `head_signature_valid`| (Phase 8a) signatures enforced ⇒ a matching cap carries a valid issuer/chained HMAC | `invalid_signature` |
@@ -355,13 +355,13 @@ or a delegation request), so the common case mirrors the canonical example exact
   - **8c — gated mock tool runtime.** ✅ Done. See §24. A tool runtime that executes only
     for a fresh, action-bound, single-use grant — the evaluator becomes an enforcement
     boundary.
-  - **8d — action-hash-bound confirmations.** Next. Bind a confirmation token to the hash
-    of the exact action it approves (prevents confirmation replay across actions); the
-    execution grant is already action-bound, 8d extends the same idea to confirmations.
-  - **8e–8f — remaining.** Tamper-evident (hash-chained) audit log; output-side
-    information-flow prototype. Plus longer-term: compile a richer capability calculus
-    into fixed attention/FFN matrices; formal verification of the reducer; asymmetric
-    signatures / real macaroons with third-party caveats.
+  - **8d — action-hash-bound confirmations.** ✅ Done. See §26. A confirmation may bind to
+    the hash of the exact action it approves, so it cannot be replayed across actions.
+  - **8e — tamper-evident audit log.** Next. Hash-chained decision log so the audit trail
+    is append-only and verifiable.
+  - **8f — remaining.** Output-side information-flow prototype. Plus longer-term: compile a
+    richer capability calculus into fixed attention/FFN matrices; formal verification of
+    the reducer; asymmetric signatures / real macaroons with third-party caveats.
 
 ## 21. Phase 8a — cryptographically authenticated capabilities
 
@@ -472,11 +472,34 @@ evaluator.
 
 API: `POST /authorize`, `POST /execute`. See `examples/gated_runtime_demo.py`.
 
-## 25. Future work (post-8c)
+## 26. Phase 8d — action-hash-bound confirmations
 
-- **8d — action-hash-bound confirmations.** Bind a confirmation token to the hash of the
-  exact action it approves, preventing confirmation replay across actions.
-- **8e — tamper-evident audit log.** Hash-chained decision log.
+A confirmation in v1–8c bound only (subject, action, object), so a human approval of
+"send to bob" would equally approve "send to attacker" — a confirmed-deputy replay across
+actions. Phase 8d lets a confirmation bind to the **exact** action.
+
+- **Binding.** `Confirmation.action_hash` (optional) and `CapabilityBundle.action_hash`
+  carry the hash of the concrete action (subject, action, object, args) — the same
+  `compute_action_hash` the 8c grant uses. A bound confirmation matches only when its
+  `action_hash` equals the request's.
+- **Tensor-native.** Binding is reduced to a per-confirmation bit (`CBIND_OFF`) computed at
+  tokenization and ANDed into the existing `head_confirmation` match — no string compare in
+  the attention core.
+- **Policy.** `CapabilityTransformer(require_bound_confirmations=True)` accepts *only*
+  bound confirmations (unbound ones are ignored); the default lax mode keeps v1–8c
+  behavior (unbound confirmations work) for backward compatibility.
+- **End to end.** `ToolGateway.authorize` sets the bundle's `action_hash` from the concrete
+  `ToolCall`, so a confirmation approved for one set of args yields no `ALLOW`/grant for a
+  different payload — the gateway returns `ESCALATE` instead.
+- **Trace.** `trace.request.action_hash` records the bound action for audit.
+
+Covered by `tests/test_bound_confirmations.py`: bound confirmation matching the request
+allows; wrong/absent hash escalates in strict mode; a confirmation for one action cannot
+authorize another; end-to-end the gateway refuses a grant when args differ.
+
+## 27. Future work (post-8d)
+
+- **8e — tamper-evident audit log.** Hash-chained, append-only decision log.
 - **8f — output-side information-flow prototype.** Taint tracking on tool outputs.
 - Longer term: compile a richer capability calculus into fixed attention/FFN matrices;
   formal verification of the reducer; asymmetric signatures / real macaroons.

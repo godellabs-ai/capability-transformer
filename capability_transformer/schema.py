@@ -61,12 +61,18 @@ class Revocation(BaseModel):
 
 
 class Confirmation(BaseModel):
-    """A trusted human-in-the-loop confirmation for a high-risk action."""
+    """A trusted human-in-the-loop confirmation for a high-risk action.
+
+    Phase 8d: an optional ``action_hash`` binds the confirmation to one exact action
+    (subject, action, object, args). A bound confirmation only approves the request whose
+    ``action_hash`` it matches — it cannot be replayed against a different action.
+    """
 
     subject: Subject
     object: Object
     action: Right
     issuer: Issuer
+    action_hash: Optional[str] = None
 
 
 class CapabilityBundle(BaseModel):
@@ -88,6 +94,9 @@ class CapabilityBundle(BaseModel):
     scope: dict[str, Any] = Field(default_factory=dict)
     # Optional deterministic time override for expiry evaluation.
     now: Optional[datetime] = None
+    # Phase 8d: hash of the concrete action (subject, action, object, args). Used to match
+    # action-bound confirmations. Set by the tool gateway from the actual ToolCall.
+    action_hash: Optional[str] = None
 
 
 class HeadTrace(BaseModel):

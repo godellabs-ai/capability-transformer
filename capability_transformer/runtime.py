@@ -251,6 +251,12 @@ class ToolGateway:
     ) -> tuple[Decision, Optional[ExecutionGrant]]:
         now = aware(now) if now is not None else datetime.now(timezone.utc)
         nonce = nonce if nonce is not None else uuid.uuid4().hex
+
+        # Phase 8d: bind the evaluation to the concrete action so action-bound confirmations
+        # are checked against this exact call. Set action_hash unless the caller already did.
+        if bundle.action_hash is None:
+            bundle = bundle.model_copy(update={"action_hash": compute_action_hash(call)})
+
         decision = self.engine.evaluate(bundle)
 
         # Only ALLOW yields a grant, and only if the call matches the evaluated action.

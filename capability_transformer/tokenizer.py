@@ -50,6 +50,7 @@ def encode(
     *,
     keyring=None,
     require_signatures: bool = False,
+    require_bound_confirmations: bool = False,
 ) -> EncodedBundle:
     """Convert a bundle into the (N x D) token matrix and index metadata.
 
@@ -134,6 +135,10 @@ def encode(
         row_types.append("capability")
 
     # ---- confirmation tokens ---------------------------------------------------------
+    # Phase 8d: each confirmation carries an action-binding bit. A bound confirmation
+    # (with action_hash) is only valid for the request whose action_hash it matches; an
+    # unbound confirmation is valid only when bound confirmations are not required.
+    req_hash = bundle.action_hash
     conf_indices: list[int] = []
     for conf in bundle.confirmations:
         vec = _blank()
@@ -143,6 +148,11 @@ def encode(
         _set_slot(vec, "rights", W.one_hot(W.RIGHT_IDX, conf.action, W.N_RIGHT))
         _set_slot(vec, "issuer", W.one_hot(W.ISSUER_IDX, conf.issuer, W.N_ISSUER))
         vec[W.CONFIRM_OFF] = 1.0
+        if conf.action_hash is not None:
+            bind_ok = req_hash is not None and conf.action_hash == req_hash
+        else:
+            bind_ok = not require_bound_confirmations
+        vec[W.CBIND_OFF] = 1.0 if bind_ok else 0.0
         conf_indices.append(len(rows))
         rows.append(vec)
         row_types.append("confirmation")

@@ -239,6 +239,18 @@ The runtime trusts only a grant whose HMAC it can verify with the shared gateway
 secret — never the LLM, the caller, or a bare decision object. Tools are mocks: no real
 side effects occur.
 
+**Action-bound confirmations (Phase 8d).** A high-risk confirmation can be bound to the
+hash of the *exact* action (subject, action, object, args), so a human approval of "send
+to bob" cannot be replayed to authorize "send to attacker":
+
+```python
+engine = CapabilityTransformer(require_bound_confirmations=True)  # accept only bound confirmations
+```
+
+With `require_bound_confirmations=True`, an unbound or mismatched confirmation yields
+`ESCALATE` (and therefore no grant). `ToolGateway.authorize` sets the bundle's
+`action_hash` from the concrete `ToolCall`, so binding is enforced end to end.
+
 ## ⚠️ Warning — prototype, not production security
 
 This is a **research prototype**. Capability issuance is *mocked*: trust is decided by an

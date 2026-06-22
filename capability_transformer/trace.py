@@ -123,6 +123,7 @@ def build_trace(
             "object": bundle.object,
             "source_provenance": bundle.source_provenance,
             "high_risk": att.high_risk,
+            "action_hash": bundle.action_hash,
         },
         signature=_signature_block(enc),
         delegation=_delegation_block(enc, att),

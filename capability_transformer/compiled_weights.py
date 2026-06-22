@@ -90,7 +90,8 @@ CONFIRM_OFF = DELEG_OFF + 1           # 43
 SIG_OFF = CONFIRM_OFF + 1             # 44  (Phase 8a: signature-valid bit)
 CHAIN_OFF = SIG_OFF + 1               # 45  (Phase 8b: delegation-chain-valid bit)
 ATTEN_OFF = CHAIN_OFF + 1             # 46  (Phase 8b: attenuation-valid bit)
-D = ATTEN_OFF + 1                     # 47
+CBIND_OFF = ATTEN_OFF + 1             # 47  (Phase 8d: confirmation action-binding bit)
+D = CBIND_OFF + 1                     # 48
 
 # Convenience slot slices (start, stop) for slicing the token matrix X.
 SLOT = {

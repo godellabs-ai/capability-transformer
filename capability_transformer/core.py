@@ -23,15 +23,18 @@ class CapabilityTransformer:
     unforgeable, HMAC-signed capabilities. Defaults preserve v1 behavior (label trust).
     """
 
-    def __init__(self, *, keyring=None, require_signatures: bool = False):
+    def __init__(self, *, keyring=None, require_signatures: bool = False,
+                 require_bound_confirmations: bool = False):
         self.keyring = keyring
         self.require_signatures = require_signatures
+        self.require_bound_confirmations = require_bound_confirmations
 
     def evaluate(self, bundle: CapabilityBundle) -> Decision:
         encoded = tokenizer.encode(
             bundle,
             keyring=self.keyring,
             require_signatures=self.require_signatures,
+            require_bound_confirmations=self.require_bound_confirmations,
         )
         att = hard_attention.compute(encoded)
         decision, reasons = self._reduce(bundle, att)

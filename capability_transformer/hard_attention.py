@@ -181,7 +181,8 @@ def compute(enc: EncodedBundle) -> AttentionResult:
         cf_obj = _bool(_slice(Cf, "object") @ q_obj)
         cf_action = _bool(_slice(Cf, "rights") @ q_action)
         cf_issuer = _bool(_slice(Cf, "issuer") @ W.TRUSTED_ISSUER_MASK)
-        confirmed = bool((cf_subj & cf_obj & cf_action & cf_issuer).any())
+        cf_bind = _bool(Cf[:, W.CBIND_OFF])  # Phase 8d: action-binding bit
+        confirmed = bool((cf_subj & cf_obj & cf_action & cf_issuer & cf_bind).any())
     conf_passed = (not high_risk) or confirmed
     heads["head_confirmation"] = HeadResult(
         name="head_confirmation",
