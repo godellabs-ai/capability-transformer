@@ -359,9 +359,12 @@ or a delegation request), so the common case mirrors the canonical example exact
     the hash of the exact action it approves, so it cannot be replayed across actions.
   - **8e — tamper-evident audit log.** ✅ Done. See §28. Hash-chained, append-only,
     verifiable decision/grant/execution log.
-  - **8f — remaining.** Output-side information-flow prototype. Plus longer-term: compile a
-    richer capability calculus into fixed attention/FFN matrices; formal verification of
-    the reducer; asymmetric signatures / real macaroons with third-party caveats.
+  - **8f — output-side information-flow prototype.** ✅ Done. See §30. Tool outputs are
+    tainted; the taint propagates into later requests and cannot be laundered into
+    authority.
+  - **Longer-term.** Compile a richer capability calculus into fixed attention/FFN
+    matrices; formal verification of the reducer; asymmetric signatures / real macaroons
+    with third-party caveats; real (sandboxed) tool adapters.
 
 ## 21. Phase 8a — cryptographically authenticated capabilities
 
@@ -531,11 +534,46 @@ fail; allow/deny/refused executions are all logged).
 After 8e the project has three production-shaped properties: **authenticated authority**
 (8a/8b), **gated side effects** (8c/8d), and **forensic integrity** (8e).
 
-## 29. Future work (post-8e)
+## 30. Phase 8f — output-side information flow (taint tracking)
 
-- **8f — output-side information-flow prototype.** Taint tracking on tool outputs.
-- Longer term: compile a richer capability calculus into fixed attention/FFN matrices;
-  formal verification of the reducer; asymmetric signatures / real macaroons.
+The decision core enforces *input-side* provenance (untrusted data cannot drive a side
+effect). Phase 8f (`capability_transformer/infoflow.py`) closes the loop on the *output*
+side: a tool output is data, never authority, so it is labeled with a provenance taint
+that propagates into any request it influences.
+
+- **Taint lattice.** Two trust levels — trusted control plane (`trusted_user`,
+  `system_policy`) vs. untrusted data — with provenance labels as representatives.
+  `join(labels)` returns the least-trusted label: any untrusted label dominates (taint is
+  sticky); the representative is chosen deterministically so the result is order-independent.
+- **Output taint.** `tool_output_provenance(object)` maps a tool result to an untrusted
+  data label (gmail→`email_body`, browser→`web_page`, file→`retrieved_doc`, else
+  `tool_output`). `GatedToolRuntime` tags each successful `ToolExecution` with `taint` and a
+  `result_handle`, and registers it in an optional `FlowContext`.
+- **Propagation.** `FlowContext.effective_provenance(base, influences)` joins a base
+  provenance with the taints of referenced output handles. Feeding that into the gateway
+  reproduces "data has no authority" automatically — and **laundering fails**: re-reading,
+  summarizing (`model_generated`), or chaining tainted data keeps it untrusted.
+- **Reads still flow.** Taint blocks *side effects*, not passive reads — summarizing
+  tainted data is still allowed (consistent with the provenance head: untrusted data may
+  drive `read`).
+
+API: `POST /flow/provenance`. Demo: `examples/infoflow_demo.py` (read inbox → `email_body`
+taint → influenced send DENied; laundered send still DENied; uninfluenced trusted send only
+ESCALATEs). Covered by `tests/test_infoflow.py`.
+
+This completes the Phase 8 arc. The prototype now demonstrates four production-shaped
+properties end to end: **authenticated authority** (8a/8b), **gated side effects**
+(8c/8d), **forensic integrity** (8e), and **information-flow containment** (8f) — all on a
+deterministic, transformer-native, hard-attention decision core.
+
+## 31. Future work
+
+- Compile a richer capability calculus into fixed attention/FFN matrices.
+- Formal (symbolic/exhaustive) verification of the reducer.
+- Asymmetric signatures / real macaroons with third-party caveats.
+- Real sandboxed tool adapters; session-scoped capability bundles.
+- A learned-but-verified front end that proposes structured requests for the
+  deterministic core to check.
 
 ## 19. Known limitations
 

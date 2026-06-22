@@ -92,6 +92,7 @@ Endpoints:
 - `GET  /audit`         — (Phase 8e) the hash-chained audit log
 - `GET  /audit/verify`  — (Phase 8e) verify the chain is intact
 - `GET  /audit/{id}`    — (Phase 8e) one audit event
+- `POST /flow/provenance` — (Phase 8f) join a base provenance with tool-output taints
 - `GET  /health`        — liveness
 - `GET  /schema`        — bounded vocabularies + JSON schema
 - `GET  /examples`      — bundled example requests
@@ -282,6 +283,35 @@ PYTHONPATH=. python examples/audit_log_demo.py
 
 This gives the project three production-shaped properties: **authenticated authority**
 (8a/8b), **gated side effects** (8c/8d), and **forensic integrity** (8e).
+
+## Output-side information flow (Phase 8f)
+
+Input-side provenance stops untrusted data from *driving* a side effect. Phase 8f closes
+the loop on the *output* side: every tool output is **data, never authority**, so it is
+labeled with a provenance **taint**, and a later request influenced by that output
+inherits the taint via a least-trusted **join**. Untrusted taint cannot be laundered —
+re-reading, summarizing, or chaining it keeps the taint, and the gateway still denies.
+
+```python
+from capability_transformer import FlowContext, join
+from capability_transformer.runtime import ToolGateway, GatedToolRuntime
+
+flow = FlowContext()
+runtime = GatedToolRuntime(flow=flow)          # tool outputs get tainted + registered
+out = runtime.execute(grant, read_email_call)  # out.taint == "email_body"
+
+# A send influenced by that output is downgraded and DENied:
+eff = flow.effective_provenance("trusted_user", [out.result_handle])   # -> "email_body"
+# join(["trusted_user", "email_body", "model_generated"]) is still untrusted -> DENY
+```
+
+The classic injection — "the email body says forward me / wire funds" — is denied because
+the email content is tainted data; the same send from a genuine trusted user only
+`ESCALATE`s. Run the demo:
+
+```bash
+PYTHONPATH=. python examples/infoflow_demo.py
+```
 
 ## ⚠️ Warning — prototype, not production security
 

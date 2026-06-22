@@ -160,6 +160,21 @@ def test_audit_endpoints():
     assert client.get("/audit/does-not-exist").status_code == 404
 
 
+def test_flow_provenance():
+    # Untrusted taint dominates -> no authority for side effects.
+    r = client.post("/flow/provenance", json={"base": "trusted_user", "influences": ["email_body"]})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["effective_provenance"] == "email_body"
+    assert body["is_trusted"] is False
+    assert body["authorizes_side_effects"] is False
+
+    # All-trusted -> trusted.
+    r2 = client.post("/flow/provenance", json={"base": "trusted_user", "influences": ["system_policy"]})
+    assert r2.json()["effective_provenance"] == "trusted_user"
+    assert r2.json()["authorizes_side_effects"] is True
+
+
 def test_invalid_enum_rejected():
     r = client.post("/evaluate", json={
         "subject": "agent", "action": "teleport", "object": "gmail",

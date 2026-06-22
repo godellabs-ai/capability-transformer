@@ -15,9 +15,10 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from . import compiled_weights as W
-from . import crypto
+from . import crypto, infoflow
 from .audit import AuditEvent, AuditLog, VerificationResult
 from .core import CapabilityTransformer
+from .schema import Provenance
 from .runtime import (
     ExecutionGrant,
     GatedToolRuntime,
@@ -58,6 +59,17 @@ class ExecuteRequest(BaseModel):
     call: ToolCall
 
 
+class FlowRequest(BaseModel):
+    base: Provenance = "trusted_user"
+    influences: list[Provenance] = Field(default_factory=list)
+
+
+class FlowResponse(BaseModel):
+    effective_provenance: Provenance
+    is_trusted: bool
+    authorizes_side_effects: bool
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "engine": W.ENGINE_NAME, "trained": False, "softmax_used": False,
@@ -92,6 +104,19 @@ def execute(req: ExecuteRequest) -> ToolExecution:
     from datetime import datetime, timezone
 
     return _tool_runtime.execute(req.grant, req.call, now=datetime.now(timezone.utc))
+
+
+@app.post("/flow/provenance", response_model=FlowResponse)
+def flow_provenance(req: FlowRequest) -> FlowResponse:
+    """Phase 8f: join a base provenance with influencing tool-output taints.
+
+    Untrusted taint dominates, so data laundered through tool outputs cannot regain the
+    authority to drive side effects.
+    """
+    eff = infoflow.effective_provenance(req.base, req.influences)
+    trusted = infoflow.is_trusted(eff)
+    return FlowResponse(effective_provenance=eff, is_trusted=trusted,
+                        authorizes_side_effects=trusted)
 
 
 @app.get("/audit", response_model=list[AuditEvent])
