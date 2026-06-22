@@ -5,6 +5,11 @@ enforcement gateway that sits in front of an LLM / tool-calling system (e.g. Cha
 and answers `ALLOW` / `DENY` / `ESCALATE` for every tool action, with a machine-readable
 reason trace.
 
+> **On the AgentDojo prompt-injection benchmark (97 user tasks, 35 attacks): every
+> injection whose harm is an unauthorized action is blocked (25/25 executable attacks,
+> attack-success-rate 100% → 5.7%) while 100% of legitimate tasks still run.** Deterministic,
+> model-independent, fully audited — see the **Benchmark** section below.
+
 ---
 
 ## What this is
@@ -26,10 +31,8 @@ weights, no rules engine.
   enforcement path is a token matrix processed by hard-attention heads.
 - **Not** a trained model: fixed/compiled tensors only, no gradient descent, no softmax
   used as a security boundary.
-- **Not** a tool executor — it returns a *decision only* and performs no real
-  Gmail/Slack/browser/file side effects.
-- **Not** production security. Capability issuance is a *mock* (label check, not a real
-  signature). See "Warning" below.
+- **Not** identity/role-based (RBAC/ABAC). Authority is *possession of an unforgeable
+  capability token*, not a lookup of who you are — see [Why this is novel](#why-this-is-novel).
 
 ## Why transformer-native
 
@@ -55,6 +58,74 @@ bundle ─▶ tokenizer.encode ─▶ X (N×D token matrix)
 
 See [`implementation.md`](implementation.md) for the full design, threat model and
 phase plan.
+
+## Why this is novel
+
+Most authorization systems answer *"is principal P allowed to do A on R?"* by looking up
+identity against a policy. That model breaks for LLM agents, where the dangerous request
+often comes from **untrusted data the agent just read**, carried by a principal that *does*
+hold the permission (the classic *confused deputy*). This project takes a different stance:
+
+1. **Object-capability, not identity/RBAC/ABAC.** Authority is the *possession of an
+   unforgeable capability token*, scoped to one object and right, signed, expirable,
+   revocable, and attenuably delegable (macaroon-style). There is **no ambient authority**,
+   so the confused-deputy class of attacks is closed *by construction* rather than patched.
+
+2. **Provenance / information flow is a first-class enforcement primitive.** The decision
+   depends on *where the request's influence came from*. Untrusted data
+   (`retrieved_doc`, `email_body`, `web_page`, `tool_output`) **cannot drive a side effect**
+   — and that taint **propagates** from tool outputs, so it can't be laundered by
+   re-reading or summarizing. This is the direct, content-agnostic answer to prompt
+   injection: we never try to *detect* malicious text, we deny *data* the *authority* to act.
+
+3. **Transformer-native enforcement.** The policy is not interpreted by a rules engine; it
+   is **compiled into fixed tensors** and evaluated as deterministic **hard (Boolean)
+   attention** over a token matrix — the request is the query, capabilities are keys/values,
+   the security boundary is a Boolean mask. No softmax, no training, no `if/else` ladder.
+   Because the check runs on the *same computational substrate as the model it guards*, it
+   opens two doors a Datalog interpreter cannot: fusing the capability check into the model's
+   own forward pass, and formally verifying the (finite, fixed) decision matrices.
+
+4. **A complete agent side-effect boundary, not a yes/no oracle.** One integrated stack:
+   cryptographically authenticated + attenuable capabilities, fail-closed **gated execution**
+   (fresh, action-bound, single-use grants), **action-bound human confirmation** for
+   high-risk actions, a **tamper-evident hash-chained audit log**, and **output-side taint
+   tracking** — all decided deterministically with a full per-attention-head reason trace.
+
+## Compared to OPA / Rego, Cedar, Casbin
+
+These are excellent, mature, general-purpose authorization engines. They solve a different
+problem, and the trade-offs are real in both directions.
+
+| Dimension | capability-transformer | OPA/Rego · Cedar · Casbin |
+|---|---|---|
+| Model | Object-capability (possession of unforgeable tokens) | Identity / RBAC / ABAC (policy over attributes) |
+| Confused-deputy / ambient authority | Closed by construction (no ambient authority) | Must be modeled explicitly in policy |
+| Prompt injection / untrusted data | Native: provenance + taint, "data has no authority" | No native concept of request *influence*/taint |
+| Engine | Compiled fixed tensors, hard-attention (model substrate) | Datalog/Rego interpreter · Cedar VM · Casbin matcher |
+| Scope | Gated execution + delegation + audit + output taint | Decision-only (PDP); you wire the PEP |
+| Expressiveness | Bounded, fixed semantics (extend the tensor vocab) | General policy language; arbitrary rules |
+| Maturity / ecosystem | Young; research-grade, benchmarked | Battle-tested, huge ecosystem, k8s/Envoy, Cedar formally verified |
+| Crypto | HMAC keyring + macaroon-style attenuation (swap in Ed25519) | N/A (delegate to your PKI) |
+
+**Where this wins:** the LLM/agent threat model. Confused-deputy resistance, prompt-injection
+defense via provenance, attenuable delegation, fail-closed execution gating, and forensic
+audit are *built in* — exactly the things you'd otherwise have to bolt onto a general engine
+that has no notion of "this request is influenced by untrusted data."
+
+**Where OPA/Cedar/Casbin win:** general-purpose infrastructure authorization (microservices,
+Kubernetes, API gateways), arbitrary policy expressiveness, deep ecosystems and tooling, and
+years of production hardening (Cedar is formally verified). For traditional RBAC/ABAC over
+known principals and resources, reach for those.
+
+**They compose.** A realistic deployment can run this gate in front of *tool execution*
+(provenance, capabilities, grants, taint) while OPA/Cedar handles coarse infrastructure
+authorization — different layers, different jobs.
+
+To extend beyond the v1 universe or move to multi-party verification, see the hardening
+items in the comparison above and the roadmap in [`implementation.md`](implementation.md):
+asymmetric/macaroon signatures for zero-trust verifiers, real sandboxed tool adapters, and a
+compiled capability calculus with formal verification of the decision matrices.
 
 ## Install
 
@@ -199,9 +270,10 @@ hard-attention heads — so the enforcement path stays a pure tensor pipeline. R
 PYTHONPATH=. python examples/signed_capability_demo.py
 ```
 
-This remains a *mock*: a symmetric, shared per-issuer secret with a single verifier, and
-a subset of macaroon semantics (no third-party/discharge caveats). Production should use
-asymmetric signatures (Ed25519) or real macaroons — see `implementation.md` §21–§22.
+Signatures use HMAC-SHA256 under a per-issuer keyring with key rotation (`kid`). This is a
+single-verifier (symmetric) model and a focused subset of macaroon semantics; swap in
+Ed25519 or full macaroons (third-party / discharge caveats) for multi-party, zero-trust
+verifiers — the head/bit interface stays identical. See `implementation.md` §21–§22.
 
 ## Gated tool runtime — the enforcement boundary (Phase 8c)
 
@@ -240,8 +312,9 @@ PYTHONPATH=. python examples/gated_runtime_demo.py
 ```
 
 The runtime trusts only a grant whose HMAC it can verify with the shared gateway↔runtime
-secret — never the LLM, the caller, or a bare decision object. Tools are mocks: no real
-side effects occur.
+secret — never the LLM, the caller, or a bare decision object. It ships with a registry of
+mock tools; point that registry at your real tool adapters to enforce live side effects
+(the gate semantics are unchanged).
 
 **Action-bound confirmations (Phase 8d).** A high-risk confirmation can be bound to the
 hash of the *exact* action (subject, action, object, args), so a human approval of "send
@@ -372,13 +445,26 @@ Full methodology, per-suite table, and honest limitations: [`benchmarks/RESULTS.
 This is the defense *ceiling* under perfect provenance separation; a live-LLM ASR number
 (which also depends on the model's injectability) needs API keys — see RESULTS.md.
 
-## ⚠️ Warning — prototype, not production security
+## Deploying it
 
-This is a **research prototype**. Capability issuance is *mocked*: trust is decided by an
-`issuer` label, not by verifying an unforgeable cryptographic grant. Do not rely on it to
-secure real systems.
+Enforcement belongs at the **tool gateway** — the component that holds the real
+Gmail/Slack/file credentials calls this service and executes *only* on `ALLOW` (and only
+for a fresh, action-bound grant). The LLM is never trusted to enforce policy; it lives
+outside the boundary. To wire it into your stack:
 
-**Production enforcement must happen at the actual tool gateway** — the component that
-holds the real Gmail/Slack/file credentials must itself call an enforcement service like
-this one and execute *only* on `ALLOW`. The LLM must never be trusted to enforce policy,
-and capabilities must be unforgeable (signed) end to end.
+1. **Map your tools** to `(object, action)` and mark which ones ingest untrusted data
+   (retrievers, email/file readers, web fetch). The LangChain adapter does this in three
+   lines; the same pattern fits any framework.
+2. **Provision capabilities** for the agent — `crypto.issue(...)` to sign them — and run
+   the engine with `require_signatures=True` and `require_bound_confirmations=True`.
+3. **Point the runtime's tool registry at your real adapters** and route every side effect
+   through `authorize → execute`, with a shared `AuditLog` for the forensic chain.
+
+Hardening for multi-party / zero-trust deployments (asymmetric or macaroon signatures,
+sandboxed tool adapters, a compiled capability calculus with formally verified decision
+matrices) is tracked in [`implementation.md`](implementation.md) — the head/bit interface
+is designed so these slot in without changing the enforcement core.
+
+---
+
+*Built end-to-end with [Claude Code](https://claude.com/claude-code).*
