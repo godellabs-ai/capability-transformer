@@ -4,6 +4,14 @@ A deterministic, transformer-native object-capability enforcement gateway.
 """
 
 from .core import CapabilityTransformer
+from .runtime import (
+    ExecutionGrant,
+    GatedToolRuntime,
+    GrantIssuer,
+    ToolCall,
+    ToolExecution,
+    ToolGateway,
+)
 from .schema import (
     Capability,
     CapabilityBundle,
@@ -21,6 +29,12 @@ __all__ = [
     "Revocation",
     "Decision",
     "Trace",
+    "ToolGateway",
+    "GatedToolRuntime",
+    "GrantIssuer",
+    "ExecutionGrant",
+    "ToolCall",
+    "ToolExecution",
 ]
 
 __version__ = "0.1.0"

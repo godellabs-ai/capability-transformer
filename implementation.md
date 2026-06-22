@@ -352,13 +352,16 @@ or a delegation request), so the common case mirrors the canonical example exact
   - **8b — attenuable delegated capabilities.** ✅ Done. See §22. Macaroon-style
     chained-HMAC child capabilities, verified into `head_chain_valid` /
     `head_attenuation_valid`.
-  - **8c — gated mock tool runtime.** Next. A tool runtime that refuses to execute
-    without a fresh `ALLOW` from the gateway (turns the evaluator into an enforcement
-    boundary).
-  - **8d–8f — remaining.** Action-hash-bound confirmations; tamper-evident audit log;
-    output-side information-flow prototype. Plus longer-term: compile a richer capability
-    calculus into fixed attention/FFN matrices; formal verification of the reducer;
-    asymmetric signatures / real macaroons with third-party caveats.
+  - **8c — gated mock tool runtime.** ✅ Done. See §24. A tool runtime that executes only
+    for a fresh, action-bound, single-use grant — the evaluator becomes an enforcement
+    boundary.
+  - **8d — action-hash-bound confirmations.** Next. Bind a confirmation token to the hash
+    of the exact action it approves (prevents confirmation replay across actions); the
+    execution grant is already action-bound, 8d extends the same idea to confirmations.
+  - **8e–8f — remaining.** Tamper-evident (hash-chained) audit log; output-side
+    information-flow prototype. Plus longer-term: compile a richer capability calculus
+    into fixed attention/FFN matrices; formal verification of the reducer; asymmetric
+    signatures / real macaroons with third-party caveats.
 
 ## 21. Phase 8a — cryptographically authenticated capabilities
 
@@ -438,10 +441,39 @@ hand authority to another subject; a child cannot outlive, widen the scope of, o
 re-delegate beyond its parent; tampering a child field breaks the signature; tampering
 `parent_hash` breaks the chain; revoking/expiring the parent kills the child.
 
-## 23. Future work (post-8b)
+## 24. Phase 8c — gated tool runtime (the enforcement boundary)
 
-- **8c — gated mock tool runtime.** A tool runtime that executes only on a fresh `ALLOW`,
-  fail-closed. This turns the evaluator into an actual enforcement boundary.
+Through 8b the service only *decided*; it gated nothing. Phase 8c
+(`capability_transformer/runtime.py`) adds the component that holds the (mock) tools and
+**refuses to execute without a fresh, action-bound, single-use grant** signed by the
+gateway. This is the step that makes the project an enforcement boundary, not just an
+evaluator.
+
+- **Two trust domains.** `ToolGateway` (policy) evaluates a bundle and, on `ALLOW`, issues
+  an `ExecutionGrant`. `GatedToolRuntime` (holds the tools/credentials) trusts *only* a
+  grant whose HMAC it can verify with the shared gateway↔runtime secret — never the LLM,
+  the caller, or a bare `Decision` object. In production these are separate services; here
+  they share a symmetric mock secret.
+- **The grant is bound three ways.**
+  - *action-bound*: it carries `action_hash = SHA-256(subject, action, object, args)`, so a
+    grant for "draft to bob with body X" cannot execute "send", a different recipient, or a
+    different body;
+  - *time-bound*: `issued_at`/`expires_at` (default 30s TTL) — a leaked grant is not durable;
+  - *single-use*: the runtime consumes the grant `nonce`, so it cannot be replayed.
+- **Fail-closed.** Every failure refuses with a reason code and runs no tool: `no_grant`
+  (DENY/ESCALATE produce no grant), `grant_signature_invalid` (forged/tampered/foreign
+  key), `grant_expired`, `action_binding_mismatch`, `grant_replayed`, `unknown_tool`.
+- **Decision flow.** `bundle ─▶ /authorize ─▶ (Decision, grant?) ─▶ /execute(grant, call)
+  ─▶ ToolExecution`. DENY and ESCALATE never yield a grant, so the only path to execution
+  is a current `ALLOW` for the *exact* call. High-risk actions still ESCALATE (no grant)
+  until a trusted confirmation flips them to `ALLOW`.
+- **Mock.** Tools return fake results; no real Gmail/Slack/file/browser side effects. The
+  gateway↔runtime auth is a shared symmetric secret (production: mutual auth / asymmetric).
+
+API: `POST /authorize`, `POST /execute`. See `examples/gated_runtime_demo.py`.
+
+## 25. Future work (post-8c)
+
 - **8d — action-hash-bound confirmations.** Bind a confirmation token to the hash of the
   exact action it approves, preventing confirmation replay across actions.
 - **8e — tamper-evident audit log.** Hash-chained decision log.

@@ -85,11 +85,13 @@ python -m capability_transformer.api
 
 Endpoints:
 
-- `POST /evaluate` — evaluate a request bundle → decision + trace
-- `POST /mint`     — (Phase 8a) sign a capability with the demo issuer keyring
-- `GET  /health`   — liveness
-- `GET  /schema`   — bounded vocabularies + JSON schema
-- `GET  /examples` — bundled example requests
+- `POST /evaluate`  — evaluate a request bundle → decision + trace
+- `POST /authorize` — (Phase 8c) evaluate + issue a fresh execution grant on ALLOW
+- `POST /execute`   — (Phase 8c) run a mock tool, but only for a valid grant (fail-closed)
+- `POST /mint`      — (Phase 8a) sign a capability with the demo issuer keyring
+- `GET  /health`    — liveness
+- `GET  /schema`    — bounded vocabularies + JSON schema
+- `GET  /examples`  — bundled example requests
 
 ## Example curl commands
 
@@ -196,6 +198,46 @@ PYTHONPATH=. python examples/signed_capability_demo.py
 This remains a *mock*: a symmetric, shared per-issuer secret with a single verifier, and
 a subset of macaroon semantics (no third-party/discharge caveats). Production should use
 asymmetric signatures (Ed25519) or real macaroons — see `implementation.md` §21–§22.
+
+## Gated tool runtime — the enforcement boundary (Phase 8c)
+
+Through Phase 8b the service was an *evaluator*: it returned a decision but gated nothing.
+Phase 8c adds the component that actually holds the (mock) tools and **refuses to run
+anything without a fresh, action-bound, single-use grant** signed by the gateway:
+
+```python
+from capability_transformer import ToolCall
+from capability_transformer.runtime import ToolGateway, GatedToolRuntime
+
+gateway, runtime = ToolGateway(), GatedToolRuntime()
+call = ToolCall(subject="agent", action="draft", object="gmail",
+                args={"to": "bob@example.com", "body": "hi"})
+
+decision, grant = gateway.authorize(bundle, call)   # grant is None unless ALLOW
+result = runtime.execute(grant, call)               # runs ONLY for a valid grant
+```
+
+The grant is **action-bound** (carries a hash of the exact call + args), **time-bound**
+(default 30s TTL) and **single-use** (nonce consumed on execution). Everything fails
+closed:
+
+| situation                         | runtime result                          |
+|-----------------------------------|-----------------------------------------|
+| DENY / ESCALATE                   | no grant → `refused: no_grant`          |
+| replay a used grant               | `refused: grant_replayed`               |
+| tampered grant (e.g. action swap) | `refused: grant_signature_invalid`      |
+| expired grant                     | `refused: grant_expired`                |
+| grant args ≠ call args            | `refused: action_binding_mismatch`      |
+
+Run the demo:
+
+```bash
+PYTHONPATH=. python examples/gated_runtime_demo.py
+```
+
+The runtime trusts only a grant whose HMAC it can verify with the shared gateway↔runtime
+secret — never the LLM, the caller, or a bare decision object. Tools are mocks: no real
+side effects occur.
 
 ## ⚠️ Warning — prototype, not production security
 

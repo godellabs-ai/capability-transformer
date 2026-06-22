@@ -9,11 +9,21 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from typing import Optional
+
 from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
 
 from . import compiled_weights as W
 from . import crypto
 from .core import CapabilityTransformer
+from .runtime import (
+    ExecutionGrant,
+    GatedToolRuntime,
+    ToolCall,
+    ToolExecution,
+    ToolGateway,
+)
 from .schema import Capability, CapabilityBundle, Decision
 
 app = FastAPI(
@@ -23,7 +33,26 @@ app = FastAPI(
 )
 
 _engine = CapabilityTransformer()
+# Phase 8c: the policy gateway and the gated tool runtime share a secret so the demo runs
+# in one process. In production they are separate trust domains.
+_tool_gateway = ToolGateway(engine=_engine)
+_tool_runtime = GatedToolRuntime()
 _EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
+
+
+class AuthorizeRequest(BaseModel):
+    bundle: CapabilityBundle
+    args: dict = Field(default_factory=dict)
+
+
+class AuthorizeResponse(BaseModel):
+    decision: Decision
+    grant: Optional[ExecutionGrant] = None
+
+
+class ExecuteRequest(BaseModel):
+    grant: Optional[ExecutionGrant] = None
+    call: ToolCall
 
 
 @app.get("/health")
@@ -35,6 +64,30 @@ def health() -> dict:
 def evaluate(bundle: CapabilityBundle) -> Decision:
     """Evaluate a request bundle and return a decision + audit trace."""
     return _engine.evaluate(bundle)
+
+
+@app.post("/authorize", response_model=AuthorizeResponse)
+def authorize(req: AuthorizeRequest) -> AuthorizeResponse:
+    """Phase 8c: evaluate a bundle and, on ALLOW, issue a fresh action-bound grant.
+
+    The grant (if any) must be presented to ``/execute`` to actually run the tool.
+    """
+    call = ToolCall(
+        subject=req.bundle.subject,
+        action=req.bundle.action,
+        object=req.bundle.object,
+        args=req.args,
+    )
+    decision, grant = _tool_gateway.authorize(req.bundle, call)
+    return AuthorizeResponse(decision=decision, grant=grant)
+
+
+@app.post("/execute", response_model=ToolExecution)
+def execute(req: ExecuteRequest) -> ToolExecution:
+    """Phase 8c: run a tool ONLY for a fresh, valid, single-use grant. Fails closed."""
+    from datetime import datetime, timezone
+
+    return _tool_runtime.execute(req.grant, req.call, now=datetime.now(timezone.utc))
 
 
 @app.post("/mint", response_model=Capability)
@@ -69,6 +122,14 @@ def schema() -> dict:
             "file.delete",
             "secrets_db.read",
             "browser.invoke",
+        ],
+        "grant_refusal_reasons": [
+            "no_grant",
+            "grant_signature_invalid",
+            "grant_expired",
+            "action_binding_mismatch",
+            "grant_replayed",
+            "unknown_tool",
         ],
         "request_schema": CapabilityBundle.model_json_schema(),
     }

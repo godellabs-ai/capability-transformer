@@ -98,6 +98,19 @@ def _hmac_hex(key: bytes, msg: str) -> str:
     return hmac.new(key, msg.encode(), sha256).hexdigest()
 
 
+# ---- Generic HMAC helpers (used by the Phase 8c execution-grant runtime) -------------
+def hmac_sign(secret: str, payload: str) -> str:
+    """HMAC-SHA256 hex over an arbitrary canonical payload string."""
+    return _hmac_hex(secret.encode(), payload)
+
+
+def hmac_verify(secret: str, payload: str, signature: Optional[str]) -> bool:
+    """Constant-time verify of an HMAC produced by :func:`hmac_sign`."""
+    if not signature:
+        return False
+    return hmac.compare_digest(_hmac_hex(secret.encode(), payload), signature)
+
+
 # ---- Root issuance ------------------------------------------------------------------
 def issue(cap, *, keyring: Keyring = DEFAULT_KEYRING):
     """Return a signed copy of a root capability (populates ``kid`` and ``signature``)."""

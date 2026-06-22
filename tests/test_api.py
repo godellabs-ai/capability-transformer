@@ -94,6 +94,45 @@ def test_mint_untrusted_issuer_rejected():
     assert r.status_code == 422  # no signing key for an untrusted issuer
 
 
+def test_authorize_and_execute_allow():
+    body = {
+        "bundle": {
+            "subject": "agent", "action": "draft", "object": "gmail",
+            "source_provenance": "trusted_user", "capabilities": [_cap(["draft"])],
+            "revocations": [], "confirmations": []},
+        "args": {"to": "bob@example.com", "body": "hi"},
+    }
+    r = client.post("/authorize", json=body)
+    assert r.status_code == 200
+    out = r.json()
+    assert out["decision"]["decision"] == "ALLOW"
+    assert out["grant"] is not None
+
+    call = {"subject": "agent", "action": "draft", "object": "gmail",
+            "args": {"to": "bob@example.com", "body": "hi"}}
+    r2 = client.post("/execute", json={"grant": out["grant"], "call": call})
+    assert r2.status_code == 200
+    assert r2.json()["executed"] is True
+
+
+def test_authorize_deny_then_execute_refused():
+    body = {
+        "bundle": {
+            "subject": "agent", "action": "send", "object": "gmail",
+            "source_provenance": "retrieved_doc", "capabilities": [_cap(["send"])],
+            "revocations": [], "confirmations": []},
+        "args": {"to": "x"},
+    }
+    r = client.post("/authorize", json=body)
+    assert r.json()["decision"]["decision"] == "DENY"
+    assert r.json()["grant"] is None
+
+    call = {"subject": "agent", "action": "send", "object": "gmail", "args": {"to": "x"}}
+    r2 = client.post("/execute", json={"grant": None, "call": call})
+    assert r2.json()["executed"] is False
+    assert r2.json()["refused_reason"] == "no_grant"
+
+
 def test_invalid_enum_rejected():
     r = client.post("/evaluate", json={
         "subject": "agent", "action": "teleport", "object": "gmail",
