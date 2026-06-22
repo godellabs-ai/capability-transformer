@@ -566,8 +566,31 @@ properties end to end: **authenticated authority** (8a/8b), **gated side effects
 (8c/8d), **forensic integrity** (8e), and **information-flow containment** (8f) — all on a
 deterministic, transformer-native, hard-attention decision core.
 
-## 31. Future work
+## 31. Agent integration — LangChain (`capability_transformer/integrations`)
 
+To show the gateway works with a widely-used agent, `CapabilityGuard` wraps real LangChain
+tools. `wrap(tool)` returns a drop-in `StructuredTool` that calls `gateway.authorize`
+before running; on `DENY`/`ESCALATE` the real tool never executes and the agent receives a
+refusal observation; on `ALLOW` it runs through the gated runtime (grant + audit + taint).
+
+The integration's job is the three adapters discussed in the design: (1) a tool →
+`(object, action)` map, (2) pre-provisioned capabilities, and (3) **provenance** — the
+guard tracks *session provenance*, tainting it whenever a data-ingesting tool (retriever,
+file/email read, web fetch) runs, so subsequent side-effecting calls are evaluated with
+that taint. This is content-agnostic: the gateway denies untrusted *data* the *authority*
+to act rather than trying to detect "malicious" text.
+
+`examples/langchain_rag_demo.py` runs a genuine LangChain tool-calling agent (deterministic
+fake chat model, no API key) and shows both required properties at once on the *same* agent:
+a poisoned retrieved document cannot drive `send_email` (DENY `data_has_no_authority`, even
+though the agent holds the send capability), while a benign question still completes. Tests:
+`tests/test_langchain_integration.py` (skipped if `langchain-core` is absent). A rigorous
+follow-up would integrate this guard as a defense in a published injection benchmark
+(e.g. AgentDojo) and report attack-success-rate vs. task-utility before/after.
+
+## 32. Future work
+
+- Integrate as a defense in AgentDojo / InjecAgent; report attack-success vs. utility.
 - Compile a richer capability calculus into fixed attention/FFN matrices.
 - Formal (symbolic/exhaustive) verification of the reducer.
 - Asymmetric signatures / real macaroons with third-party caveats.

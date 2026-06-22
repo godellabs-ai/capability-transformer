@@ -22,6 +22,9 @@ dev = [
     "pytest>=8.0",
     "httpx>=0.27",
 ]
+langchain = [
+    "langchain-core>=0.3",
+]
 
 [tool.setuptools.packages.find]
 include = ["capability_transformer*"]
