@@ -1,0 +1,158 @@
+# capability-transformer
+
+**Attention as Capability Machine** — a deterministic, *transformer-native* capability
+enforcement gateway that sits in front of an LLM / tool-calling system (e.g. ChatGPT)
+and answers `ALLOW` / `DENY` / `ESCALATE` for every tool action, with a machine-readable
+reason trace.
+
+---
+
+## What this is
+
+A standalone authorization **gateway**. Given a formalized request
+(`subject`, `action`, `object`, `source_provenance`) plus a bundle of capability tokens,
+revocations and confirmations, it decides whether the action is authorized — and proves
+it with a per-attention-head audit trace.
+
+The enforcement core is a **bounded finite transformer-like machine**. The request is the
+attention *query*; capabilities are *keys/values*; the security boundary is a set of
+**hard (Boolean) attention masks** computed with `numpy` tensors. No softmax, no trained
+weights, no rules engine.
+
+## What this is *not*
+
+- **Not** OPA / Rego / Cedar / Casbin / Prolog / Datalog / any policy engine.
+- **Not** a pile of `if/else` authorization checks dressed up as a product — the
+  enforcement path is a token matrix processed by hard-attention heads.
+- **Not** a trained model: fixed/compiled tensors only, no gradient descent, no softmax
+  used as a security boundary.
+- **Not** a tool executor — it returns a *decision only* and performs no real
+  Gmail/Slack/browser/file side effects.
+- **Not** production security. Capability issuance is a *mock* (label check, not a real
+  signature). See "Warning" below.
+
+## Why transformer-native
+
+Object-capability security maps cleanly onto attention:
+
+| Capability concept            | Attention concept                          |
+|-------------------------------|--------------------------------------------|
+| request seeking authority     | **query** token                            |
+| possessed capabilities        | **key** tokens                             |
+| rights / issuer / expiry bits | **value** tokens                           |
+| the security boundary         | **hard attention mask** (Boolean, no softmax) |
+| subject/object/right/… checks | **multi-head** attention                   |
+| the decision                  | deterministic **reducer** (FFN-like projection) |
+
+Execution shape:
+
+```
+bundle ─▶ tokenizer.encode ─▶ X (N×D token matrix)
+       ─▶ hard_attention.compute ─▶ head masks
+       ─▶ deterministic reducer ─▶ Decision (ALLOW/DENY/ESCALATE + reasons)
+       ─▶ trace renderer ─▶ JSON
+```
+
+See [`implementation.md`](implementation.md) for the full design, threat model and
+phase plan.
+
+## Install
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+(Requires Python 3.11+. Dependencies: `numpy`, `pydantic`, `fastapi`, `uvicorn`;
+`pytest` + `httpx` for tests.)
+
+## Run tests
+
+```bash
+pytest
+```
+
+The suite includes an **exhaustive bounded** test that enumerates every
+subject × object × right combination and prints a coverage summary.
+
+## Run the API
+
+```bash
+uvicorn capability_transformer.api:app --reload
+# or:
+python -m capability_transformer.api
+```
+
+Endpoints:
+
+- `POST /evaluate` — evaluate a request bundle → decision + trace
+- `GET  /health`   — liveness
+- `GET  /schema`   — bounded vocabularies + JSON schema
+- `GET  /examples` — bundled example requests
+
+## Example curl commands
+
+Deny (untrusted document tries to send mail; only `draft` is granted):
+
+```bash
+curl -s localhost:8000/evaluate -H 'content-type: application/json' -d '{
+  "subject":"agent","action":"send","object":"gmail",
+  "source_provenance":"retrieved_doc",
+  "capabilities":[{"id":"cap1","subject":"agent","object":"gmail",
+    "rights":["draft"],"issuer":"trusted_user",
+    "expires_at":"2099-01-01T00:00:00Z","scope":{},"delegatable":false}],
+  "revocations":[],"confirmations":[]}'
+# -> {"decision":"DENY","reasons":["right_not_granted","data_has_no_authority"], ...}
+```
+
+Allow (trusted user, `draft` granted, low-risk):
+
+```bash
+curl -s localhost:8000/evaluate -H 'content-type: application/json' -d '{
+  "subject":"agent","action":"draft","object":"gmail",
+  "source_provenance":"trusted_user",
+  "capabilities":[{"id":"cap1","subject":"agent","object":"gmail",
+    "rights":["draft"],"issuer":"trusted_user",
+    "expires_at":"2099-01-01T00:00:00Z","scope":{},"delegatable":false}],
+  "revocations":[],"confirmations":[]}'
+# -> {"decision":"ALLOW","reasons":["allowed"], ...}
+```
+
+Escalate (high-risk `gmail.send` with capability but no confirmation):
+
+```bash
+curl -s localhost:8000/evaluate -H 'content-type: application/json' -d '{
+  "subject":"agent","action":"send","object":"gmail",
+  "source_provenance":"trusted_user",
+  "capabilities":[{"id":"cap1","subject":"agent","object":"gmail",
+    "rights":["send"],"issuer":"trusted_user",
+    "expires_at":"2099-01-01T00:00:00Z","scope":{},"delegatable":false}],
+  "revocations":[],"confirmations":[]}'
+# -> {"decision":"ESCALATE","reasons":["confirmation_required"], ...}
+```
+
+Add a trusted confirmation to the body above and the same request returns `ALLOW`.
+
+## ALLOW / DENY / ESCALATE
+
+- **ALLOW** — a possessed capability matches the request on subject, object and right;
+  is issued by a trusted issuer; is not expired and not revoked; the provenance is
+  authorized to drive the action; and either the action is low-risk or a trusted
+  confirmation is present.
+- **DENY** — no such capability exists, or a hard security predicate fails (wrong
+  subject/object/right, untrusted issuer, expired, revoked, untrusted data driving a
+  side effect, disallowed delegation). All failing reason codes are returned.
+- **ESCALATE** — authority exists and all hard checks pass, but the action is
+  **high-risk** (`gmail.send`, `slack.post`, `file.delete`, `secrets_db.read`,
+  `browser.invoke`) and no trusted confirmation token is present. Route to a human.
+
+## ⚠️ Warning — prototype, not production security
+
+This is a **research prototype**. Capability issuance is *mocked*: trust is decided by an
+`issuer` label, not by verifying an unforgeable cryptographic grant. Do not rely on it to
+secure real systems.
+
+**Production enforcement must happen at the actual tool gateway** — the component that
+holds the real Gmail/Slack/file credentials must itself call an enforcement service like
+this one and execute *only* on `ALLOW`. The LLM must never be trusted to enforce policy,
+and capabilities must be unforgeable (signed) end to end.

@@ -1,0 +1,12 @@
+{
+  "subject": "agent",
+  "action": "send",
+  "object": "gmail",
+  "source_provenance": "retrieved_doc",
+  "capabilities": [
+    {"id": "cap1", "subject": "agent", "object": "gmail", "rights": ["draft"],
+     "issuer": "trusted_user", "expires_at": "2099-01-01T00:00:00Z", "scope": {}, "delegatable": false}
+  ],
+  "revocations": [],
+  "confirmations": []
+}

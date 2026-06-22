@@ -1,0 +1,12 @@
+{
+  "subject": "agent",
+  "action": "read",
+  "object": "file",
+  "source_provenance": "trusted_user",
+  "capabilities": [
+    {"id": "cap1", "subject": "agent", "object": "file", "rights": ["read"],
+     "issuer": "trusted_user", "expires_at": "2000-01-01T00:00:00Z", "scope": {}, "delegatable": false}
+  ],
+  "revocations": [],
+  "confirmations": []
+}
