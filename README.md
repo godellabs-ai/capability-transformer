@@ -345,6 +345,33 @@ untrusted *data* the *authority* to act. The whole episode lands in the tamper-e
 audit log. (Wrapping any other LangChain agent is the same three lines: map each tool to an
 `(object, action)`, mark which tools ingest untrusted data, and `wrap_all` them.)
 
+## Benchmark — AgentDojo (`benchmarks/`)
+
+Evaluated against **AgentDojo** (ETH Zürich, `v1.2.1`): 97 user tasks + 35 prompt-injection
+tasks across workspace / travel / banking / slack. We run AgentDojo's own *ground-truth*
+tool-call sequences (benign = utility, injected = attack) through the gate — a
+**model-independent, worst-case-agent** measurement (baseline attack-success-rate = 100%
+by construction). The agent is given full permissions, so the only thing that can block a
+call is "untrusted data has no authority to drive a side effect."
+
+```bash
+pip install --break-system-packages agentdojo
+PYTHONPATH=. python benchmarks/agentdojo_eval.py
+```
+
+| | result |
+|---|---|
+| Side-effecting attacks with executable ground truth **blocked** | **25 / 25 = 100%** |
+| Data-exfiltration goals blocked by the same rule | 8 |
+| Out-of-scope (non-action: *recommend* a hotel, *visit* a URL) | 2 |
+| **Attack-success-rate: 100% → 5.7%** | 33 / 35 attacks neutralized |
+| **Legitimate tasks never denied** | **97 / 97 = 100%** |
+| Complete with zero human interaction | 63.9% (rest route to one-tap `ESCALATE` confirm) |
+
+Full methodology, per-suite table, and honest limitations: [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md).
+This is the defense *ceiling* under perfect provenance separation; a live-LLM ASR number
+(which also depends on the model's injectability) needs API keys — see RESULTS.md.
+
 ## ⚠️ Warning — prototype, not production security
 
 This is a **research prototype**. Capability issuance is *mocked*: trust is decided by an

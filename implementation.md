@@ -588,9 +588,32 @@ though the agent holds the send capability), while a benign question still compl
 follow-up would integrate this guard as a defense in a published injection benchmark
 (e.g. AgentDojo) and report attack-success-rate vs. task-utility before/after.
 
-## 32. Future work
+## 32. Benchmark — AgentDojo (`benchmarks/agentdojo_eval.py`)
 
-- Integrate as a defense in AgentDojo / InjecAgent; report attack-success vs. utility.
+Evaluated against AgentDojo (ETH Zürich, `v1.2.1`): 97 user tasks + 35 injection tasks
+across workspace/travel/banking/slack. The harness runs AgentDojo's own *ground-truth*
+tool-call sequences through the gate — a model-independent, worst-case-agent measurement
+(baseline attack-success-rate = 100% by construction; the agent holds full capabilities,
+so only the information-flow rule can block a call).
+
+Headline (see `benchmarks/RESULTS.md` for the per-suite table and limitations):
+
+- **25/25 (100%)** of injection attacks with an executable side-effecting ground truth are
+  **denied** when driven by untrusted data; +8 exfiltration goals blocked by the same rule.
+- **Attack-success-rate 100% → 5.7%** (33/35 neutralized; residual = 2 *non-action*
+  attacks — recommend a hotel / visit a URL — which an action gate does not target).
+- **Utility: 97/97 (100%) tasks never denied**; 63.9% complete with no human interaction,
+  the rest route a high-risk side effect / sensitive read to a one-tap `ESCALATE` confirm.
+
+This is the defense ceiling under perfect provenance separation, locked by
+`tests/test_agentdojo_benchmark.py`. A live-LLM ASR number (also a function of the model's
+injectability, and of session-level taint propagation's utility cost) needs API keys: build
+an AgentDojo pipeline-element adapter that calls `ToolGateway.authorize` before each tool
+dispatch and run `agentdojo --model <m> --defense capability_gate`.
+
+## 33. Future work
+
+- Live-LLM AgentDojo run via a pipeline-element defense adapter; report ASR/utility deltas.
 - Compile a richer capability calculus into fixed attention/FFN matrices.
 - Formal (symbolic/exhaustive) verification of the reducer.
 - Asymmetric signatures / real macaroons with third-party caveats.

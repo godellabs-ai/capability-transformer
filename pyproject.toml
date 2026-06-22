@@ -25,6 +25,9 @@ dev = [
 langchain = [
     "langchain-core>=0.3",
 ]
+agentdojo = [
+    "agentdojo>=0.1.30",
+]
 
 [tool.setuptools.packages.find]
 include = ["capability_transformer*"]
