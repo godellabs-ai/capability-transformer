@@ -110,6 +110,31 @@ for the SAME c` is a hard attention max-pool over capability tokens — it can n
 `subject_match` from one capability with `right_match` from another. Walk a decision with
 `python examples/compiled_transformer_demo.py`.
 
+## Visual microscope (`/ui`)
+
+A browser "microscope" replays the **exact compiled forward pass** for any input, one
+operation at a time, with **rewind / step / inspect**:
+
+```bash
+uvicorn capability_transformer.api:app   # then open http://localhost:8000/ui/
+```
+
+- A **residual-stream heatmap** (tokens × named slots, grouped `features | policy |
+  evidence`) that mutates as evidence flows through the layers; changed cells flash each step.
+- **Attention arcs** drawn query → key on each match head, labeled with the `Q·K` score.
+- A **scrubber** (play · step · rewind · jump-to-layer) — every view is a pure function of
+  the current step, so rewind and replay are instant.
+- A **per-step math panel** (head scores, feed-forward AND/OR/NOT gates, the `∃` max-pool,
+  and the output projection → logits → argmax), live **per-capability evidence** pills, and a
+  **Q/K matrix inspector** (click *inspect Q/K matrices →* on any attention step).
+- A **decision banner** with reasons and a **"✓ matches reference"** badge, plus a gallery of
+  example inputs (allow, prompt-injection deny, escalate, confirmed, expired, revoked, a
+  signed delegation chain, and the cross-capability soundness case).
+
+Backed by `POST /trace` (the full step-by-step trace JSON) and `GET /model/head/{name}`
+(the actual projection matrices) — both usable headless. The trace is deterministic, so the
+UI is a pure replayer.
+
 ## Why this is novel
 
 Most authorization systems answer *"is principal P allowed to do A on R?"* by looking up
@@ -212,6 +237,9 @@ is **not production security** and must be opted into explicitly with
 
 Endpoints:
 
+- `GET  /ui/`           — the **visual microscope** single-page app
+- `POST /trace`         — full step-by-step forward-pass trace for a bundle (drives `/ui`)
+- `GET  /model/head/{name}` — the Q/K projection matrices for one attention head
 - `POST /evaluate`      — evaluate a request bundle → decision + trace
 - `POST /authorize`     — evaluate + issue a fresh execution grant on ALLOW
 - `POST /execute`       — run a mock tool, but only for a valid grant (fail-closed)

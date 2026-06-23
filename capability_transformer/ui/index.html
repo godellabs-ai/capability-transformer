@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Capability Transformer · Microscope</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header id="topbar">
+    <div class="brand">
+      <span class="logo">◎</span>
+      <div>
+        <div class="title">Capability Transformer</div>
+        <div class="subtitle">microscope — watch the compiled forward pass, step by step</div>
+      </div>
+    </div>
+    <div id="decision-banner" class="decision pending">
+      <span id="decision-text">—</span>
+      <span id="reasons"></span>
+      <span id="ref-badge" class="badge"></span>
+    </div>
+  </header>
+
+  <main>
+    <aside id="sidebar">
+      <h3>Examples</h3>
+      <div id="presets" class="presets"></div>
+
+      <h3>Custom input</h3>
+      <label class="toggle"><input type="checkbox" id="require_signatures" /> require signatures</label>
+      <label class="toggle"><input type="checkbox" id="require_bound" /> require bound confirmations</label>
+      <textarea id="bundle-json" spellcheck="false" rows="14"></textarea>
+      <button id="run-btn" class="run">▶ Run forward pass</button>
+      <div id="error" class="error"></div>
+
+      <h3>Layers</h3>
+      <ol id="layer-legend" class="legend"></ol>
+    </aside>
+
+    <section id="stage">
+      <div id="viz-wrap">
+        <svg id="viz" xmlns="http://www.w3.org/2000/svg"></svg>
+        <div id="tooltip" class="tooltip" hidden></div>
+      </div>
+
+      <div id="scrubber">
+        <button id="first" title="first">⏮</button>
+        <button id="prev" title="step back">◀</button>
+        <button id="play" title="play/pause">▶</button>
+        <button id="next" title="step forward">▶▶</button>
+        <button id="last" title="last">⏭</button>
+        <input type="range" id="slider" min="0" max="0" value="0" />
+        <span id="step-label" class="step-label">—</span>
+        <label class="speed">speed
+          <select id="speed"><option value="700">slow</option>
+            <option value="350" selected>med</option><option value="120">fast</option></select>
+        </label>
+      </div>
+    </section>
+
+    <aside id="inspector">
+      <h3 id="op-title">Step detail</h3>
+      <div id="op-desc" class="op-desc"></div>
+      <div id="op-math" class="op-math"></div>
+      <div id="logits-panel" hidden>
+        <h4>Output projection</h4>
+        <div id="logits-bars" class="logits"></div>
+      </div>
+      <h4>Per-capability evidence</h4>
+      <div id="cap-evidence" class="cap-evidence"></div>
+    </aside>
+  </main>
+
+  <div id="modal" class="modal" hidden>
+    <div class="modal-box">
+      <button id="modal-close" class="modal-close">✕</button>
+      <h3 id="modal-title">head</h3>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
