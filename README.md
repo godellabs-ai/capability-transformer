@@ -1,14 +1,16 @@
 # capability-transformer
 
-**Attention as Capability Machine** — a deterministic, *transformer-native* capability
-enforcement gateway that sits in front of an LLM / tool-calling system (e.g. ChatGPT)
-and answers `ALLOW` / `DENY` / `ESCALATE` for every tool action, with a machine-readable
-reason trace.
+**Attention as Capability Machine** — a deterministic, transformer-style capability
+enforcement gateway for LLM/tool-calling systems. It answers `ALLOW` / `DENY` /
+`ESCALATE` for formalized tool actions using bounded hard-attention tensor computation,
+with inspectable decision evidence.
 
-> **On the AgentDojo prompt-injection benchmark (97 user tasks, 35 attacks): every
-> injection whose harm is an unauthorized action is blocked (25/25 executable attacks,
-> attack-success-rate 100% → 5.7%) while 100% of legitimate tasks still run.** Deterministic,
-> model-independent, fully audited — see the **Benchmark** section below.
+> On a ground-truth AgentDojo action-gate analysis, the gate blocks 25/25 executable
+> side-effecting attack tool calls. Under action-goal accounting, 33/35 injection tasks
+> are neutralized; 2 are outside an action gate’s scope. Legitimate tasks are 97/97
+> never denied, with 63.9% allowed without human confirmation. This is a
+> model-independent ceiling analysis under perfect provenance separation, not a live-LLM
+> ASR measurement.
 
 📖 **Deep dive:** [*Attention as a Capability Machine*](blog/introducing-capability-transformer.md)
 — motivation, full architecture, and how it compares to OPA/Cedar, guardrails, and CaMeL.
@@ -83,9 +85,12 @@ The project ships **two** evaluators of the same policy:
 
 The defensible claim:
 
-> *A bounded object-capability authorization machine can be compiled into an analytically
-> weighted transformer-style architecture whose attention heads act as exact capability
-> selectors, producing decisions equivalent to a readable reference evaluator.*
+> A bounded object-capability authorization machine can be compiled into deterministic
+> transformer-style computation with analytically constructed weights. Its attention heads
+> act as exact selectors over typed token fields, Boolean feed-forward gates compute
+> per-capability validity, hard max-pooling implements existential aggregation, and an
+> output projection selects `ALLOW` / `DENY` / `ESCALATE`. The compiled evaluator’s
+> decisions are tested for equivalence against a readable reference evaluator.
 
 Execution shape of the compiled path:
 
