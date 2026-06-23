@@ -4,7 +4,12 @@ A deterministic, transformer-native object-capability enforcement gateway.
 """
 
 from .audit import AuditEvent, AuditLog
-from .core import CapabilityTransformer
+from .compiled_core import CompiledCapabilityTransformer
+from .core import (
+    CapabilityTransformer,
+    DemoUnsignedCapabilityTransformer,
+    SecureCapabilityTransformer,
+)
 from .infoflow import FlowContext, effective_provenance, is_trusted, join, tool_output_provenance
 from .runtime import (
     ExecutionGrant,
@@ -25,6 +30,9 @@ from .schema import (
 
 __all__ = [
     "CapabilityTransformer",
+    "SecureCapabilityTransformer",
+    "DemoUnsignedCapabilityTransformer",
+    "CompiledCapabilityTransformer",
     "CapabilityBundle",
     "Capability",
     "Confirmation",

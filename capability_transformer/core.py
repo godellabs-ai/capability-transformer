@@ -107,6 +107,32 @@ class CapabilityTransformer:
         return "ALLOW", ["allowed"]
 
 
+class SecureCapabilityTransformer(CapabilityTransformer):
+    """Production-facing engine: signatures and action-bound confirmations are REQUIRED.
+
+    Capabilities must carry a valid issuer (or chained) signature, and a high-risk action
+    is only confirmed by a confirmation token bound to that exact action's hash. This is
+    the default engine for the HTTP gateway.
+    """
+
+    def __init__(self, *, keyring=None):
+        super().__init__(keyring=keyring, require_signatures=True,
+                         require_bound_confirmations=True)
+
+
+class DemoUnsignedCapabilityTransformer(CapabilityTransformer):
+    """Explicit DEMO/TEST engine: trusts issuer *labels*, not signatures.
+
+    This mode does not verify cryptographic capability grants and is **not production
+    security**. It exists so demos and benchmarks can exercise the provenance/capability
+    logic without minting signatures. Never expose it on a production-facing path.
+    """
+
+    def __init__(self, *, keyring=None):
+        super().__init__(keyring=keyring, require_signatures=False,
+                         require_bound_confirmations=False)
+
+
 def _dedupe(items: list[str]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []

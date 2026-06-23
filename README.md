@@ -62,6 +62,42 @@ bundle ─▶ tokenizer.encode ─▶ X (N×D token matrix)
 See [`implementation.md`](implementation.md) for the full design, threat model and
 phase plan.
 
+## Two evaluators: a readable reference and a compiled transformer
+
+The project ships **two** evaluators of the same policy:
+
+- **`CapabilityTransformer`** — the readable **reference** evaluator. It is the
+  specification: a deterministic reducer over hard Boolean masks.
+- **`CompiledCapabilityTransformer`** — an **analytically compiled, transformer-style**
+  evaluator. The policy is compiled into fixed Q/K projection matrices, a residual stream
+  of named evidence slots, feed-forward Boolean gates, and an output projection. Its
+  decisions are **equivalent** to the reference (randomized equivalence tests in
+  `tests/test_compiled_equivalence.py`).
+
+The defensible claim:
+
+> *A bounded object-capability authorization machine can be compiled into an analytically
+> weighted transformer-style architecture whose attention heads act as exact capability
+> selectors, producing decisions equivalent to a readable reference evaluator.*
+
+Execution shape of the compiled path:
+
+```
+bundle ─▶ tokenize + embed ─▶ residual stream R  (request, policy, capability,
+                                                  confirmation, output tokens)
+       ─▶ attention heads       ─▶ per-token match evidence (Q·K exact selectors)
+       ─▶ feed-forward gates     ─▶ per-CAPABILITY conjunction  (valid_capability)
+       ─▶ attention max-pool     ─▶ ∃ a valid capability        (has_match)
+       ─▶ feed-forward gates     ─▶ required_ok, allow/deny/escalate evidence
+       ─▶ output projection      ─▶ argmax over [ALLOW, DENY, ESCALATE]  (hardmax)
+```
+
+Soundness: evidence is computed **per capability** and only then aggregated. The
+existential `has_match = ∃ c: subject∧object∧right∧issuer∧¬expired∧¬revoked∧signature∧…
+for the SAME c` is a hard attention max-pool over capability tokens — it can never combine
+`subject_match` from one capability with `right_match` from another. Walk a decision with
+`python examples/compiled_transformer_demo.py`.
+
 ## Why this is novel
 
 Most authorization systems answer *"is principal P allowed to do A on R?"* by looking up
@@ -467,6 +503,51 @@ Hardening for multi-party / zero-trust deployments (asymmetric or macaroon signa
 sandboxed tool adapters, a compiled capability calculus with formally verified decision
 matrices) is tracked in [`implementation.md`](implementation.md) — the head/bit interface
 is designed so these slot in without changing the enforcement core.
+
+## Reviewer notes
+
+**What is transformer-style.** The compiled evaluator (`CompiledCapabilityTransformer`) is a
+miniature transformer: fixed token vectors, attention heads with explicit **Q/K projection
+matrices**, a **residual stream** of named evidence slots, **feed-forward Boolean gates**
+(`y = W₂·ReLU(W₁·r + b₁) + b₂`), an attention **max-pool** for the existential aggregation,
+and an **output projection** to `[ALLOW, DENY, ESCALATE]` logits. Each attention head acts as
+an **exact capability selector**: the inner product of two one-hot/mask fields *is* the match
+predicate.
+
+**What is intentionally not neural.** There is **no training** and there are **no learned
+weights** — every matrix is constructed analytically by `compiler.py` from the bounded
+vocabularies and fixed policy masks. There are **no semantic embeddings** for authority and
+**no fuzzy similarity** for any security-critical match; matching is exact one-hot equality.
+Attention is used as **deterministic lookup/selection** (hardmax), never as a soft, scored
+boundary. A test asserts the strings `softmax`, `np.exp`, `backward`, `optimizer` never
+appear on the enforcement path.
+
+**Why this shape.** The capability semantics — possession of an unforgeable token granting a
+specific right on a specific object — are the security boundary. Expressing the bounded,
+finite decision function as fixed tensors makes it deterministic, inspectable, and amenable
+to exhaustive/symbolic verification.
+
+**How to inspect it** (`capability_transformer.inspection`):
+
+| What | How |
+|---|---|
+| Q/K matrices per head | `inspection.head_matrices(model, "subject_match")` → `{"Wq": …, "Wk": …}` |
+| Residual evidence slots | `inspection.describe_layout(model)` → slot, offset, width |
+| Feed-forward gates | `inspection.describe_gates(model)` → op, inputs, weight shapes |
+| Output projection | `inspection.output_projection_matrix(model)` (3 × D) |
+| A full decision walk | `inspection.inspect_decision(bundle)` → tokens → heads → per-cap evidence → logits |
+| Equivalence vs. reference | `pytest tests/test_compiled_equivalence.py` |
+
+**Security assumptions you must accept.** (1) **Provenance is an explicit input**, not
+inferred by the model — the gate is only as sound as the provenance label it is handed; a
+caller that mislabels untrusted data as `trusted_user` defeats the guarantee. (2) Prompt
+injection is mitigated **only under this explicit provenance model** and correct taint
+propagation; it is not a general prompt-injection solution. (3) The **unsigned/demo** engine
+(`DemoUnsignedCapabilityTransformer`) trusts issuer *labels* and is **not production
+security**; the HTTP API is secure by default (`SecureCapabilityTransformer`) and unsigned
+mode requires an explicit opt-in. (4) The audit log is **tamper-evident, not tamper-proof** —
+modification is *detected* by chain verification, not prevented. (5) This is a **bounded
+object-capability authorization machine**, not a general neural security solution.
 
 ---
 

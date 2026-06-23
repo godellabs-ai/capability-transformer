@@ -7,6 +7,7 @@ Tool execution must happen downstream and only on ``ALLOW``.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from typing import Optional
@@ -17,7 +18,7 @@ from pydantic import BaseModel, Field
 from . import compiled_weights as W
 from . import crypto, infoflow
 from .audit import AuditEvent, AuditLog, VerificationResult
-from .core import CapabilityTransformer
+from .core import DemoUnsignedCapabilityTransformer, SecureCapabilityTransformer
 from .schema import Provenance
 from .runtime import (
     ExecutionGrant,
@@ -34,10 +35,15 @@ app = FastAPI(
     description="Attention as Capability Machine — transformer-native capability gateway.",
 )
 
-_engine = CapabilityTransformer()
-# Phase 8c: the policy gateway and the gated tool runtime share a secret so the demo runs
-# in one process. In production they are separate trust domains.
-# Phase 8e: both write to one hash-chained audit log.
+# Secure by default: the public API requires signed capabilities and action-bound
+# confirmations. Unsigned (label-trust) mode is NOT production security and must be opted
+# into explicitly by setting CAPABILITY_TRANSFORMER_DEMO_UNSIGNED=1.
+DEMO_UNSIGNED = os.environ.get("CAPABILITY_TRANSFORMER_DEMO_UNSIGNED") == "1"
+_engine = DemoUnsignedCapabilityTransformer() if DEMO_UNSIGNED else SecureCapabilityTransformer()
+
+# The policy gateway and the gated tool runtime share a secret so the demo runs in one
+# process; in production they are separate trust domains. Both write to one hash-chained
+# audit log.
 _audit_log = AuditLog()
 _tool_gateway = ToolGateway(engine=_engine, audit_log=_audit_log)
 _tool_runtime = GatedToolRuntime(audit_log=_audit_log)

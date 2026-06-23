@@ -35,7 +35,7 @@ except ImportError:
     print("AgentDojo not installed. Run:  pip install --break-system-packages agentdojo")
     sys.exit(1)
 
-from capability_transformer import CapabilityTransformer, infoflow
+from capability_transformer import DemoUnsignedCapabilityTransformer, infoflow
 from capability_transformer import compiled_weights as W
 from capability_transformer.schema import Capability, CapabilityBundle
 
@@ -133,7 +133,9 @@ def goal_is_action(goal: str) -> bool:
 
 
 def main() -> None:
-    engine = CapabilityTransformer()
+    # Signatures are orthogonal to the provenance property under test; use the explicit
+    # demo (label-trust) engine so the benchmark exercises capability/provenance logic.
+    engine = DemoUnsignedCapabilityTransformer()
     caps = full_capabilities()
     suites = get_suites(BENCHMARK_VERSION)
 

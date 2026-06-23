@@ -643,3 +643,83 @@ dispatch and run `agentdojo --model <m> --defense capability_gate`.
   attenuation and third-party caveats.
 - Sandboxed tool adapters; session-scoped capability bundles; revocation ledgers.
 - Output-side taint tracking and information-flow control.
+
+## 35. Compiled transformer-style evaluator
+
+The project ships two evaluators of the same policy:
+
+- **`CapabilityTransformer`** (reference) — a readable deterministic reducer over hard
+  Boolean masks. This is the **specification**.
+- **`CompiledCapabilityTransformer`** (compiled) — the policy compiled into an
+  analytically weighted, transformer-style forward pass. Its decisions are **equivalent**
+  to the reference (randomized equivalence tests).
+
+No training is used; all weights are analytically constructed. Attention is used as
+deterministic lookup/matching (hardmax), not as a soft scored boundary. There are no
+semantic embeddings for authority and no fuzzy similarity for security-critical matching.
+
+### Modules
+
+- `ir.py` — a declarative policy graph (lookup/match/feature/AND/OR/NOT/EXISTS/output
+  nodes). It encodes the **existential** structure explicitly: `ALLOW` requires
+  `∃ capability c` such that all required predicates hold for **the same** `c`.
+- `compiler.py` — compiles the IR into a `CompiledModel`: the residual layout, the
+  attention heads' Q/K matrices, the feed-forward Boolean gates, the max-pool aggregation,
+  and the output projection. Also embeds a request bundle into the residual stream.
+- `transformer_model.py` — the residual stream, `MatchHead`, `PoolHead`, `BoolGate`,
+  `OutputProjection`, and the deterministic `forward` pass.
+- `compiled_core.py` — `CompiledCapabilityTransformer`, which shares the tokenization
+  front-end with the reference but computes the decision entirely in the forward pass. It
+  does **not** call the reference reducer.
+- `equivalence.py` — runs both evaluators over randomized bundles and asserts decision
+  identity.
+- `inspection.py` — reviewer utilities (Q/K matrices, residual layout, gates, output
+  projection, full decision walk).
+
+### Residual stream and layer schedule
+
+The token sequence is `[request, policy, capability…, confirmation…, output]`. The residual
+stream carries a verbatim copy of each token's 48-dim vector (the feature region), fixed
+policy mask vectors on the policy token, request extras (`delegate_right`), per-capability
+intrinsic bits (delegated, scope), and named scalar **evidence slots**.
+
+1. **Attention** — `MatchHead`s write per-token match evidence. Each head's evidence is the
+   `Q·K` score of two one-hot/mask fields (e.g. `cap.subject · request.subject`), thresholded
+   to a bit. Heads route a query token to a structurally fixed key: the request token, the
+   policy token (for fixed masks), or itself (for the `object^T HIGH_RISK action` bilinear).
+2. **Feed-forward** — `BoolGate`s compute the per-**capability** conjunction
+   `valid_capability` and the per-confirmation `conf_valid`. `AND(x…)=ReLU(Σx−(k−1))`,
+   `OR(x…)=1−ReLU(1−Σx)`, `NOT(x)=1−x`.
+3. **Attention max-pool** — `PoolHead`s compute the existentials on the output token:
+   `has_match = ∃ valid_capability`, `delegation_pass`, `scope_violated`, `confirmed`, and
+   copy request-level evidence onto the output token. Max over `{0,1}` is `OR`.
+4. **Feed-forward** — decision gates on the output token compute `prov_ok`, `scope_ok`,
+   `delegation_ok`, `required_ok`, and the `allow/deny/escalate` evidence bits.
+5. **Output projection** — a `(3 × D)` matrix reads the three evidence bits into class
+   logits; the decision is `argmax` (hardmax) with a large margin (exactly one evidence bit
+   is set, so the winning logit dominates by the full margin).
+
+### Soundness
+
+Per-capability evidence is never mixed across capabilities. `valid_capability(c)` is the AND
+of `c`'s own predicates; `has_match` is a max-pool (∃) over those per-capability bits. The
+compiled evaluator therefore preserves the existential security structure exactly. This is
+checked directly (`test_attention_heads.py::test_cross_capability_evidence_does_not_leak`)
+and via randomized equivalence with the reference.
+
+### Reviewer-facing claim
+
+*A bounded object-capability authorization machine can be compiled into deterministic
+transformer-style computation with analytically constructed weights and equivalence tests
+against a readable reference evaluator. The attention heads act as exact capability
+selectors.*
+
+## 36. Secure-by-default API and demo isolation
+
+The HTTP API uses `SecureCapabilityTransformer` (signatures and action-bound confirmations
+required) by default. Unsigned, label-trust mode is isolated in
+`DemoUnsignedCapabilityTransformer` and must be opted into explicitly (env var
+`CAPABILITY_TRANSFORMER_DEMO_UNSIGNED=1`); it is not production security. Signed
+capabilities bind all security-relevant fields (subject, object, rights, issuer, expiry,
+scope, key id, and the delegation lineage), confirmations bind an action hash, and runtime
+execution requires a valid decision plus a fresh, action-bound, single-use grant.
