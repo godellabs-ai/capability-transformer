@@ -22,10 +22,17 @@ A standalone authorization **gateway**. Given a formalized request
 revocations and confirmations, it decides whether the action is authorized — and proves
 it with a per-attention-head audit trace.
 
-The enforcement core is a **bounded finite transformer-like machine**. The request is the
+The enforcement core is a **bounded finite transformer-style machine**. The request is the
 attention *query*; capabilities are *keys/values*; the security boundary is a set of
 **hard (Boolean) attention masks** computed with `numpy` tensors. No softmax, no trained
 weights, no rules engine.
+
+It ships as **two evaluators of the same policy**: a readable **reference** evaluator
+(`CapabilityTransformer`, the specification) and an analytically **compiled** transformer
+(`CompiledCapabilityTransformer`) with explicit **Q/K projection matrices**, a residual
+stream of named evidence slots, feed-forward Boolean gates, and an output projection — whose
+decisions are **equivalent** to the reference (randomized equivalence tests). See
+[Two evaluators](#two-evaluators-a-readable-reference-and-a-compiled-transformer).
 
 ## What this is *not*
 
@@ -193,6 +200,11 @@ uvicorn capability_transformer.api:app --reload
 python -m capability_transformer.api
 ```
 
+The API is **secure by default**: it runs `SecureCapabilityTransformer`, so capabilities
+must be signed and high-risk confirmations must be action-bound. Unsigned, label-trust mode
+is **not production security** and must be opted into explicitly with
+`CAPABILITY_TRANSFORMER_DEMO_UNSIGNED=1`.
+
 Endpoints:
 
 - `POST /evaluate`      — evaluate a request bundle → decision + trace
@@ -208,6 +220,11 @@ Endpoints:
 - `GET  /examples`      — bundled example requests
 
 ## Example curl commands
+
+> These illustrative bodies use **unsigned** capabilities, so run the server in demo mode
+> for them: `CAPABILITY_TRANSFORMER_DEMO_UNSIGNED=1 uvicorn capability_transformer.api:app`.
+> In the default (secure) mode, mint a signed capability with `POST /mint` first and include
+> the returned `signature` + `kid`.
 
 Deny (untrusted document tries to send mail; only `draft` is granted):
 

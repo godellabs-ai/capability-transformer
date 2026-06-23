@@ -237,7 +237,89 @@ opinion.
 
 ---
 
-## 5. Making capabilities unforgeable: HMAC, key rotation, and macaroon-style delegation
+## 5. Two evaluators: from hard masks to actual Q/K/V
+
+The section above describes the **reference** evaluator: a readable deterministic reducer over
+hard Boolean masks. It is the **specification** — small enough to read in one sitting and to
+test exhaustively. But a skeptic is right to push: "masks and an `AND` are not a transformer.
+Where are the projection matrices?"
+
+So the project ships a **second** evaluator of the *same policy*: `CompiledCapabilityTransformer`,
+an analytically compiled, transformer-style forward pass. Nothing is trained; every matrix is
+constructed in closed form by a small compiler from the bounded vocabularies and the fixed
+policy masks. Its decisions are **equivalent** to the reference — checked over tens of thousands
+of randomized bundles, across signed, delegated, scoped, and confirmation modes, with zero
+mismatches. The reference is the spec; the compiled model is the spec expressed as tensors.
+
+**The residual stream.** The request, a fixed **policy** token (carrying the trusted-issuer,
+trusted-provenance, read, and delegate masks), each capability, each confirmation, and a final
+**output** token are laid into a residual stream. Beyond the 48-dim token features, the stream
+reserves **named evidence slots** — `subject_match`, `right_match`, `issuer_trusted`,
+`valid_capability`, `has_match`, `prov_ok`, `allow_evidence`, … — that later layers write into.
+
+**Attention heads as exact selectors.** Each match head has explicit `Wq` and `Wk` projection
+matrices. A capability token (the query) attends to a structurally fixed key — the request
+token, the policy token, or itself — and the head's evidence *is the attention score*: the inner
+product of two one-hot/mask fields is exactly the match predicate.
+
+```python
+# head: subject_match  — does this capability's subject equal the request's?
+Sq = R @ Wq.T            # Wq selects the cap's 5-dim subject field
+Sk = R @ Wk.T            # Wk selects the request's 5-dim subject field
+score = Sq[cap] @ Sk[request]          # one-hot · one-hot  -> 1 iff equal
+R[cap, subject_match] = 1.0 if score >= 0.5 else 0.0
+```
+
+`right_match` is the same with the cap's 8-dim multi-hot rights against the request's action
+one-hot (dot ≥ 1 ⇒ the action is in the rights). `issuer_trusted` projects the cap's issuer
+against the policy token's trusted-issuer mask. `high_risk` is a self-attention head whose `Wq`
+folds in the policy matrix so the score computes the bilinear `object · HIGH_RISK · action`.
+There is no softmax: each query attends to one structurally selected key, by hardmax.
+
+**The soundness that matters.** Authority requires that **one** capability satisfy **all**
+predicates — `∃ c: subject(c) ∧ object(c) ∧ right(c) ∧ issuer(c) ∧ ¬expired(c) ∧ ¬revoked(c) ∧
+signature(c) ∧ …`. It is *unsound* to check `any_subject_match ∧ any_object_match` globally —
+that would let `subject_match` from one capability and `right_match` from another combine into a
+grant that no single capability confers. So the compiled model computes the conjunction **per
+capability** first, in a feed-forward gate, and only then aggregates:
+
+```python
+# per-capability conjunction, in a feed-forward Boolean gate (one per capability token)
+valid_capability(c) = AND(subject_match(c), object_match(c), right_match(c),
+                          issuer_trusted(c), not_expired(c), not_revoked(c),
+                          signature_valid(c), chain_ok(c), attenuation_ok(c))
+
+# existential ∃ — a hard attention MAX-POOL over capability tokens (max of bits == OR)
+has_match = max over capabilities c of valid_capability(c)
+```
+
+A dedicated test constructs two capabilities — one with the right subject/object but only
+`read`, another with `send` but the wrong object — requests `send`, and asserts `has_match = 0`
+and the decision is `DENY`. Cross-capability evidence cannot leak.
+
+**Boolean logic as feed-forward gates.** The conjunctions, disjunctions, and negations are real
+`y = W₂·ReLU(W₁·r + b₁) + b₂` units with analytic weights: `AND(x…) = ReLU(Σx − (k−1))`,
+`OR(x…) = 1 − ReLU(1 − Σx)`, `NOT(x) = 1 − x`. The decision gates compose them on the output
+token into `required_ok = has_match ∧ prov_ok ∧ scope_ok ∧ delegation_ok`, then into the
+`allow` / `deny` / `escalate` evidence bits.
+
+**Output projection.** A fixed `(3 × D)` matrix reads those three evidence bits into class
+logits; the decision is `argmax` over `[ALLOW, DENY, ESCALATE]`. Exactly one evidence bit is
+ever set, so the winning logit dominates by the full margin — a hard decision with a large,
+inspectable gap, not a soft score you threshold and pray.
+
+A reviewer can point at any of this: `inspection.head_matrices(model, "subject_match")` returns
+the actual `Wq`/`Wk`; `inspection.describe_gates(model)` lists the feed-forward gates;
+`inspection.inspect_decision(bundle)` walks one decision from tokens → heads → per-capability
+evidence → logits. The defensible claim is precise and bounded:
+
+> *A bounded object-capability authorization machine can be compiled into an analytically
+> weighted transformer-style architecture whose attention heads act as exact capability
+> selectors, producing decisions equivalent to a readable reference evaluator.*
+
+---
+
+## 6. Making capabilities unforgeable: HMAC, key rotation, and macaroon-style delegation
 
 A capability is only as good as its unforgeability. Version 1 trusted the `issuer` *label* —
 fine for research, useless against an attacker who writes `issuer: "trusted_user"` into a
@@ -283,7 +365,7 @@ you weren't given.
 
 ---
 
-## 6. Provenance: where the prompt-injection defense actually lives
+## 7. Provenance: where the prompt-injection defense actually lives
 
 Heads 1–6 enforce *least privilege* — you can't do what you don't hold a token for. But in the
 injection scenario the agent **does** hold the `send` token. What stops the attack is head 7,
@@ -322,7 +404,7 @@ that holds under adversarial pressure: the property is about *flow*, not *string
 
 ---
 
-## 7. From evaluator to enforcement boundary: action-bound, single-use grants
+## 8. From evaluator to enforcement boundary: action-bound, single-use grants
 
 A decision is not enforcement. If the component that holds the real Gmail credentials trusts a
 bare "ALLOW" object, an attacker who can fabricate that object wins. So the tool runtime
@@ -361,7 +443,7 @@ to authorize "send to attacker." Same `action_hash` machinery, applied to the co
 
 ---
 
-## 8. Forensics: a tamper-evident, hash-chained audit log
+## 9. Forensics: a tamper-evident, hash-chained audit log
 
 Every authorization, grant mint, grant rejection, and tool execution is appended to a
 hash-chained log (`audit.py`):
@@ -382,7 +464,7 @@ authority, gated side effects, and forensic integrity.
 
 ---
 
-## 9. Wiring it into a real agent (LangChain, in three lines)
+## 10. Wiring it into a real agent (LangChain, in three lines)
 
 None of this matters if it doesn't compose with the agents people actually build. The
 integration is a wrapper that turns any LangChain `BaseTool` into a guarded one:
@@ -424,7 +506,7 @@ tamper-evident audit log.
 
 ---
 
-## 10. The proof: AgentDojo
+## 11. The proof: AgentDojo
 
 Demos are persuasive; benchmarks are evidence. We evaluated against **AgentDojo** (ETH Zürich),
 the standard prompt-injection benchmark for tool-calling agents: 4 suites (workspace, travel,
@@ -479,7 +561,7 @@ than quote a single-model number dressed up as a universal claim.
 
 ---
 
-## 11. How this compares to the incumbents
+## 12. How this compares to the incumbents
 
 There are two families of "incumbent" to compare against: **policy engines** (the authorization
 world) and **prompt-injection defenses** (the LLM-safety world).
@@ -551,22 +633,25 @@ complementary; a CaMeL-style planner could mint and pass our capabilities.
 
 ---
 
-## 12. Why transformer-native is more than a gimmick
+## 13. Why transformer-native is more than a gimmick
 
 A fair skeptic says: "You computed a Boolean function. Expressing it as `numpy` matmuls instead
-of `if/else` is presentation, not substance." Today, that's partly true — and we're careful not
-to overclaim. But the choice buys three things that an `if/else` ladder and a Rego interpreter
-cannot:
+of `if/else` is presentation, not substance." That objection is exactly why the compiled
+evaluator in §5 exists — the policy is genuinely compiled into Q/K projection matrices, a
+residual stream, feed-forward Boolean gates, and an output projection, and a randomized
+equivalence suite proves it matches the readable reference. With that on the table, the
+substrate buys three things an `if/else` ladder and a Rego interpreter cannot:
 
 1. **Determinism as a first-class property, enforced.** No softmax, no learned weights, no
    nondeterminism — *and a test that proves the words `softmax`/`backward`/`optimizer` never
-   appear on the enforcement path.* The security boundary is a hard mask, not a soft score you
-   threshold and hope.
+   appear on the enforcement path*, for both the reference and the compiled evaluator. The
+   security boundary is a hard mask, not a soft score you threshold and hope.
 
-2. **A path to fusion.** Because the check is tensor math over a token sequence, it is a
-   candidate to be co-resident with the model — evaluated in the same forward pass that proposes
-   the action, rather than as a downstream service the orchestration layer must remember to
-   call. The check that's impossible to bypass is the one that isn't a separate hop.
+2. **A path to fusion.** The compiled check is already tensor math over a token sequence with
+   real projection matrices, so it is a candidate to be co-resident with the model — evaluated
+   in the same forward pass that proposes the action, rather than as a downstream service the
+   orchestration layer must remember to call. The check that's impossible to bypass is the one
+   that isn't a separate hop.
 
 3. **A path to formal verification.** The policy is *compiled into fixed matrices* over a finite
    universe. A finite, fixed, linear-algebraic decision function is exactly the kind of object
@@ -575,13 +660,15 @@ cannot:
    complete" is a tractable goal here in a way it simply is not for a general-purpose policy
    language with arbitrary user rules.
 
-The long game is an authorization layer that is *part of the model's computation*, deterministic,
-and provably correct over its domain. We're at the start of that road, but the substrate is
-chosen for where it leads.
+What is *not* yet done is the deeper payoff: fusing the compiled pass into a real model's
+forward computation, and a machine-checked soundness proof of the decision matrices. The
+compilation itself is no longer prospective — it's in the repo, with equivalence tests. The
+long game is an authorization layer that is *part of the model's computation*, deterministic,
+and provably correct over its domain; the substrate is chosen for where it leads.
 
 ---
 
-## 13. What it isn't (yet)
+## 14. What it isn't (yet)
 
 We'd rather you trust the numbers because we're honest about the edges:
 
@@ -599,10 +686,13 @@ We'd rather you trust the numbers because we're honest about the edges:
   live model's injectability or the utility cost of session-level taint propagation.
 - **Mock tool adapters.** The runtime ships with mock tools; you point the registry at real
   adapters to enforce live side effects (the gate semantics don't change).
+- **Demo vs. secure mode.** The HTTP API is secure by default (signed capabilities and
+  action-bound confirmations required); an explicit, opt-in demo mode trusts issuer *labels*
+  instead of signatures and is *not* production security.
 
 ---
 
-## 14. Where this goes
+## 15. Where this goes
 
 The near-term roadmap: a live-LLM AgentDojo run via the pipeline-element adapter (real
 attack-success-rate / utility deltas across models); asymmetric / macaroon signatures for
