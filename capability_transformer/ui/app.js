@@ -10,10 +10,10 @@ const el = (t, a = {}, kids = []) => {
 const svg = (t, a = {}) => { const e = document.createElementNS(SVGNS, t); for (const k in a) e.setAttribute(k, a[k]); return e; };
 
 // ---- geometry ------------------------------------------------------------------------
-const COLW = 12, ROWH = 30, LABELW = 178, ARCW = 76, TOPPAD = 126, LEFTPAD = 10;
-const GROUP_BASE = { features: "#161630", policy: "#1b1436", evidence: "#141436" };
-const GROUP_ON = { features: "#4f74ff", policy: "#b07cff", evidence: "#7c5cff" };
-const GROUP_TINT = { features: "#4f74ff", policy: "#a860ff", evidence: "#6d49fd" };
+const COLW = 13, ROWH = 30, LABELW = 178, ARCW = 76, TOPPAD = 126, LEFTPAD = 10;
+const GROUP_BASE = { features: "#e9ecf6", policy: "#f1eafb", evidence: "#ebeafb" };
+const GROUP_ON = { features: "#3b6cff", policy: "#a860ff", evidence: "#6d49fd" };
+const GROUP_TINT = { features: "#3b6cff", policy: "#a860ff", evidence: "#6d49fd" };
 
 const state = { trace: null, step: 0, playing: false, timer: null, cells: [], colOf: {} };
 
@@ -79,8 +79,9 @@ function buildViz() {
   const rowsH = rows.length * ROWH;
   cols.forEach((c, i) => {
     const x = x0 + i * COLW;
-    const lab = svg("text", { x: x + COLW / 2, y: TOPPAD - 7, transform: `rotate(-55 ${x + COLW / 2} ${TOPPAD - 7})`,
-      "font-size": 8.5, fill: c.group === "evidence" ? "#9a86d6" : "#7a7b95",
+    const lab = svg("text", { x: x + COLW / 2, y: TOPPAD - 7, transform: `rotate(-52 ${x + COLW / 2} ${TOPPAD - 7})`,
+      "font-size": 9, "font-weight": 500,
+      fill: c.group === "evidence" ? "#6d49fd" : c.group === "policy" ? "#8b54cf" : "#51526b",
       "font-family": "Geist Mono, monospace", "text-anchor": "start" });
     lab.textContent = c.label; g.append(lab);
     const next = cols[i + 1];
@@ -89,11 +90,11 @@ function buildViz() {
       // faint full-height band behind the cells
       g.append(svg("rect", { x: bx, y: TOPPAD - 2, width: bw, height: rowsH + 4, rx: 6,
         fill: GROUP_TINT[c.group], opacity: 0.05 }));
-      const t2 = svg("text", { x: bx + 4, y: TOPPAD - 96, "font-size": 10, "font-weight": 700,
-        "letter-spacing": "0.12em", fill: GROUP_TINT[c.group], opacity: 0.85 });
+      const t2 = svg("text", { x: bx + 4, y: TOPPAD - 96, "font-size": 10.5, "font-weight": 700,
+        "letter-spacing": "0.12em", fill: GROUP_TINT[c.group] });
       t2.textContent = c.group.toUpperCase(); g.append(t2);
       g.append(svg("rect", { x: bx, y: TOPPAD - 90, width: bw, height: 84, rx: 6, fill: "none",
-        stroke: GROUP_TINT[c.group], "stroke-opacity": 0.22, "stroke-dasharray": "2 4" }));
+        stroke: GROUP_TINT[c.group], "stroke-opacity": 0.3, "stroke-dasharray": "2 4" }));
       runStart = i + 1;
     }
   });
@@ -103,9 +104,9 @@ function buildViz() {
   rows.forEach((tok, r) => {
     const y = TOPPAD + r * ROWH;
     const label = svg("g");
-    const lr = svg("text", { x: LEFTPAD, y: y + 14, "font-size": 12.5, fill: "#edeef5", "font-weight": 600 });
+    const lr = svg("text", { x: LEFTPAD, y: y + 14, "font-size": 12.5, fill: "#090910", "font-weight": 600 });
     lr.textContent = roleLabel(tok); label.append(lr);
-    const sub = svg("text", { x: LEFTPAD, y: y + 25, "font-size": 9.5, fill: "#82839a",
+    const sub = svg("text", { x: LEFTPAD, y: y + 25, "font-size": 9.5, fill: "#5c5d66",
       "font-family": "Geist Mono, monospace" });
     sub.textContent = subLabel(tok); label.append(sub);
     label.style.cursor = "default";
@@ -169,9 +170,9 @@ function setStep(i) {
   // highlight changed cells (what this step just wrote)
   (step.changed || []).forEach(([r, c]) => {
     const cell = state.cells[r][c];
-    cell.setAttribute("stroke", "#ffe02a");
+    cell.setAttribute("stroke", "#ff6a00");
     cell.setAttribute("stroke-width", "2");
-    cell.setAttribute("filter", "drop-shadow(0 0 4px rgba(255,224,42,.8))");
+    cell.setAttribute("filter", "drop-shadow(0 0 4px rgba(255,106,0,.6))");
   });
 
   drawArcs(step);
@@ -197,12 +198,12 @@ function drawArcs(step) {
       const y1 = yMid(m.query), y2 = yMid(m.key);
       const on = m.value > 0.5;
       const p = svg("path", { d: `M ${arcR} ${y1} C ${arcL} ${y1}, ${arcL} ${y2}, ${arcR} ${y2}`,
-        fill: "none", stroke: on ? "#a860ff" : "#3a3a5a", "stroke-width": on ? 2.2 : 1,
-        "marker-end": "url(#arrow)", opacity: on ? 1 : 0.55 });
+        fill: "none", stroke: on ? "#a860ff" : "#c9cbd8", "stroke-width": on ? 2.2 : 1,
+        "marker-end": "url(#arrow)", opacity: on ? 1 : 0.7 });
       layer.append(p);
       const tx = svg("text", { x: arcL - 3, y: (y1 + y2) / 2 + 3, "font-size": 10, "text-anchor": "end",
         "font-family": "Geist Mono, monospace", "font-weight": 600,
-        fill: on ? "#c4a6ff" : "#82839a" });
+        fill: on ? "#7c4fe0" : "#9092a0" });
       tx.textContent = m.score; layer.append(tx);
     });
   } else if (step.kind === "pool") {
@@ -311,12 +312,12 @@ function matrixView(title, M) {
     row.forEach((v, c) => {
       if (Math.abs(v) < 1e-9) return;
       const rect = svg("rect", { x: 60 + c * 6, y: r * 16, width: 5, height: 14, rx: 1,
-        fill: v > 0 ? "#7c5cff" : "#ef4444", opacity: Math.min(1, Math.abs(v)) });
+        fill: v > 0 ? "#6d49fd" : "#ef4444", opacity: Math.min(1, Math.abs(v)) });
       const lab = cols[c] ? cols[c].label : c;
       rect.append(svg("title")); rect.lastChild.textContent = `${lab} = ${v}`;
       s.append(rect);
     });
-    const rl = svg("text", { x: 0, y: r * 16 + 11, "font-size": 9, fill: "#8aa0c8" });
+    const rl = svg("text", { x: 0, y: r * 16 + 11, "font-size": 9, fill: "#5c5d66" });
     rl.textContent = "row " + r; s.append(rl);
   });
   wrap.append(s);
