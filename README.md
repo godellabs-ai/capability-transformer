@@ -112,6 +112,8 @@ for the SAME c` is a hard attention max-pool over capability tokens — it can n
 
 ## Visual microscope (`/ui`)
 
+![Capability Transformer microscope — stepping through the compiled forward pass, showing the residual-stream heatmap, per-capability evidence, and the decision](docs/microscope.gif)
+
 A browser "microscope" replays the **exact compiled forward pass** for any input, one
 operation at a time, with **rewind / step / inspect**:
 
