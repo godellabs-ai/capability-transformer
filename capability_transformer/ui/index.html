@@ -4,6 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Capability Transformer · Microscope</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -12,7 +15,7 @@
       <span class="logo">◎</span>
       <div>
         <div class="title">Capability Transformer</div>
-        <div class="subtitle">microscope — watch the compiled forward pass, step by step</div>
+        <div class="subtitle">microscope — watch data flow through the compiled transformer, step by step</div>
       </div>
     </div>
     <div id="decision-banner" class="decision pending">
@@ -30,15 +33,14 @@
       <h3>Custom input</h3>
       <label class="toggle"><input type="checkbox" id="require_signatures" /> require signatures</label>
       <label class="toggle"><input type="checkbox" id="require_bound" /> require bound confirmations</label>
-      <textarea id="bundle-json" spellcheck="false" rows="14"></textarea>
+      <textarea id="bundle-json" spellcheck="false" rows="13"></textarea>
       <button id="run-btn" class="run">▶ Run forward pass</button>
       <div id="error" class="error"></div>
-
-      <h3>Layers</h3>
-      <ol id="layer-legend" class="legend"></ol>
     </aside>
 
     <section id="stage">
+      <div id="pipeline"></div>
+      <div id="progress-wrap"><div id="progress"></div></div>
       <div id="viz-wrap">
         <svg id="viz" xmlns="http://www.w3.org/2000/svg"></svg>
         <div id="tooltip" class="tooltip" hidden></div>
@@ -46,15 +48,15 @@
 
       <div id="scrubber">
         <button id="first" title="first">⏮</button>
-        <button id="prev" title="step back">◀</button>
-        <button id="play" title="play/pause">▶</button>
-        <button id="next" title="step forward">▶▶</button>
+        <button id="prev" title="step back (←)">◀</button>
+        <button id="play" title="play / pause (space)">▶</button>
+        <button id="next" title="step forward (→)">▶▶</button>
         <button id="last" title="last">⏭</button>
         <input type="range" id="slider" min="0" max="0" value="0" />
         <span id="step-label" class="step-label">—</span>
         <label class="speed">speed
-          <select id="speed"><option value="700">slow</option>
-            <option value="350" selected>med</option><option value="120">fast</option></select>
+          <select id="speed"><option value="800">slow</option>
+            <option value="400" selected>med</option><option value="150">fast</option></select>
         </label>
       </div>
     </section>
@@ -64,7 +66,7 @@
       <div id="op-desc" class="op-desc"></div>
       <div id="op-math" class="op-math"></div>
       <div id="logits-panel" hidden>
-        <h4>Output projection</h4>
+        <h4>Output projection → argmax</h4>
         <div id="logits-bars" class="logits"></div>
       </div>
       <h4>Per-capability evidence</h4>
