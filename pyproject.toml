@@ -28,6 +28,10 @@ langchain = [
 agentdojo = [
     "agentdojo>=0.1.30",
 ]
+qwen = [
+    "torch>=2.2",
+    "transformers>=4.40",
+]
 
 [tool.setuptools.packages.find]
 include = ["capability_transformer*"]
