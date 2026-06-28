@@ -13,6 +13,10 @@ never blocking a legitimate task.*
 > 100% to 5.7%, while preserving **100%** of legitimate tasks. Repo:
 > [`sandman137/capability-transformer`](https://github.com/sandman137/capability-transformer).
 
+> **Part 2 is out:** [*Fusing a Capability Machine into an LLM: GuardedQwen, on a CPU*](guarded-qwen-fusing-the-capability-machine.md)
+> — we weld this checker into Qwen2.5-0.5B as a frozen torch sub-module and watch it stop a live
+> injection that fully compromises the model.
+
 ---
 
 ## 1. The problem nobody's agent framework solves for you
