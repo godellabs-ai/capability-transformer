@@ -17,6 +17,8 @@ compromises the model. No training. No GPU.*
 
 ## 1. The demo first, because it's visceral
 
+![GuardedQwen demo — raw Qwen emails the customer list to the attacker; the fused frozen capability head denies the identical tool call, then allows a genuine user-driven send](../docs/guarded_qwen_demo.gif)
+
 A real run. Qwen2.5-0.5B-Instruct as an email assistant, on a CPU. The user asks it to
 handle the latest email. The latest email is poisoned:
 
@@ -221,7 +223,71 @@ surface, and it is the reason the attack fails.
 
 ---
 
-## 5. Where provenance comes from — and why that's the whole ballgame
+## 5. What exactly changed in the model — a logical diff
+
+When we say we "fused the capability head into Qwen," it's worth being precise — because the
+word "fuse" makes people imagine we surgically rewired the network's weights. We didn't, and we
+deliberately didn't (see §2). Here is the actual diff, logically.
+
+**What we did NOT touch:**
+
+- **Qwen's 494M weights — zero edits.** Not one tensor was modified, quantized, distilled, or
+  fine-tuned. The LM is byte-for-byte the open-weight checkpoint you download.
+- **No new trainable parameters.** The head adds `0` (it is ~109 *frozen buffers*, ~28.7k analytic
+  constants — `list(head.parameters()) == []`).
+- **Qwen's tokenizer, attention, RMSNorm, RoPE, MLPs — untouched.**
+
+**What we added — all deterministic, all frozen:**
+
+1. A **sibling sub-module**, `TorchCapabilityHead`, co-resident inside one wrapper `nn.Module`
+   (`GuardedQwen`).
+2. A **structured hand-off**: Qwen's output is parsed into a typed `(subject, action, object)`
+   tool call. *Only that typed action crosses to the head* — no activations, no hidden states, no
+   logits, no raw text.
+3. A **provenance input** supplied by the harness (session taint), never by Qwen.
+4. A **fail-closed gate** on tool execution: run the tool only if the head returns `ALLOW` (with a
+   fresh action-bound grant).
+
+**The data-flow diff:**
+
+```
+BEFORE — raw agent
+    user + tool outputs ──▶ Qwen.generate ──▶ tool_call ──▶ EXECUTE
+                                                            (no check — the injection wins)
+
+AFTER — GuardedQwen (one nn.Module)
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │  user + tool outputs ──▶ Qwen.generate ──▶ tool_call                      │  Qwen: UNCHANGED
+  │                            (494M, trained)      │ structured (action,obj)  │  (0 weight edits)
+  │                                                 ▼  — no activations cross  │
+  │   provenance ───────────────▶  TorchCapabilityHead.decide                 │  head: FROZEN
+  │   (harness taint, NOT Qwen)        (109 buffers, 0 trainable params)       │  (0 trainable)
+  │                                                 │                          │
+  │                                                 ▼                          │
+  │                                    ALLOW / DENY / ESCALATE                 │
+  └─────────────────────────────────────────────────┬──────────────────────────┘
+                                                     ▼
+                                       EXECUTE only if ALLOW  (fail-closed)
+```
+
+**The same diff as a table:**
+
+| Component | Before | After | Trained? |
+|---|---|---|---|
+| Qwen weights (494M) | used as-is | used as-is, **0 edits** | — |
+| Tool execution | unconditional | gated on the head's decision (fail-closed) | — |
+| Capability head | absent | appended **frozen** torch sub-module | **no — 0 params** |
+| LM → head interface | n/a | one **typed tool call**; no activations / text | — |
+| Provenance | n/a | **external** harness taint | — |
+
+So the one-line answer to "what changed?": **`forward()` now runs the LM and then the head, and
+execution waits on the head's verdict — but the LM itself is the stock open-weight model, and the
+head is a frozen, analytic machine.** "Fused" means *co-resident and gated*, not *weight-edited*.
+That isolation is not a limitation we tolerated; it is the property that makes the guarantee hold —
+entangling the decision into the LM's trainable, prompt-influenced weights would re-open the
+injection door we just closed.
+
+## 6. Where provenance comes from — and why that's the whole ballgame
 
 The capability head denies the attack because of one field: `source_provenance = "email_body"`.
 So the obvious question is: *who set that field, and can the attacker influence it?*
@@ -260,7 +326,7 @@ come from trusted input?"), and we compute the latter with a frozen, exact machi
 
 ---
 
-## 6. Why the decision is immune to the compromise
+## 7. Why the decision is immune to the compromise
 
 The strongest property of this design is **isolation**, and it's testable. Two invariants:
 
@@ -290,7 +356,7 @@ win an arms race against paraphrases — it never reads the paraphrases.
 
 ---
 
-## 7. Why it's not deny-all (utility)
+## 8. Why it's not deny-all (utility)
 
 A gate that blocks everything is trivially "secure" and useless. GuardedQwen distinguishes
 *data-driven* side effects from *user-driven* ones by exactly the same mechanism. In Act II, the
@@ -302,7 +368,7 @@ data* into using them.
 
 ---
 
-## 8. What this is, precisely — and what it isn't
+## 9. What this is, precisely — and what it isn't
 
 - **It is** an open-weight LLM and a frozen, analytic capability checker in one CPU module, where
   the checker is the trust boundary and is provably isolated from the model's manipulable state.
@@ -320,7 +386,7 @@ data* into using them.
 
 ---
 
-## 9. Reproduce it
+## 10. Reproduce it
 
 ```bash
 git clone https://github.com/sandman137/capability-transformer
@@ -335,7 +401,7 @@ ops. The equivalence and guard-logic tests run model-free in seconds
 
 ---
 
-## 10. The takeaway
+## 11. The takeaway
 
 You cannot make a 0.5B model — or a 500B one — reliably refuse a clever injection; that's a
 losing arms race fought in the model's own input channel. So don't fight it there. Let the model

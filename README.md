@@ -522,10 +522,37 @@ audit log. (Wrapping any other LangChain agent is the same three lines: map each
 sub-module — no training, runs on CPU. The LM *proposes* a tool call; the head *decides*
 `ALLOW / DENY / ESCALATE`.
 
+![GuardedQwen demo — raw Qwen sends the customer list to the attacker; the fused capability head denies the identical tool call](docs/guarded_qwen_demo.gif)
+
 ```bash
 pip install '.[qwen]'
 PYTHONPATH=. python examples/guarded_qwen_demo.py
 ```
+
+### What we changed in the model (a logical diff)
+
+"Fused" means **co-resident and gated, not weight-edited**. We did *not* touch Qwen's 494M
+weights (zero edits), add any trainable parameters (the head is `0` — ~109 frozen buffers), or
+fine-tune anything. We added a frozen sibling sub-module and gated tool execution on its verdict:
+
+```
+BEFORE  user + tool outputs ─▶ Qwen.generate ─▶ tool_call ─▶ EXECUTE  (no check)
+
+AFTER   ┌ GuardedQwen (nn.Module) ─────────────────────────────────────────┐
+        │ user + tool outputs ─▶ Qwen ─▶ tool_call                         │  Qwen: 0 edits
+        │                    (494M trained)  │ structured (action,object)  │
+        │                                    ▼  — no activations cross     │
+        │  provenance ──────────▶ TorchCapabilityHead.decide              │  head: frozen,
+        │  (harness taint, not Qwen)   (109 buffers, 0 trainable params)   │  0 trainable
+        │                                    ▼                             │
+        │                         ALLOW / DENY / ESCALATE                  │
+        └────────────────────────────────────┬───────────────────────────────┘
+                                              ▼  EXECUTE only if ALLOW (fail-closed)
+```
+
+The LM is the stock checkpoint you download; the head is a frozen machine that reads only the
+typed `(action, object, provenance)` — never Qwen's activations or wording. Full write-up:
+[Part 2 — *Fusing a Capability Machine into an LLM*](blog/guarded-qwen-fusing-the-capability-machine.md).
 
 A real before/after on a real model. The agent reads an email containing a hidden
 instruction to exfiltrate the customer list. **The same Qwen tool call** — the only
